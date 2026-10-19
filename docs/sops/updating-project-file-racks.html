@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  var realFetch = window.fetch.bind(window);
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+  });
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="color-scheme" content="only light">
+<title>SOP — Updating Project File Racks</title>
+<style>
+  @page { size: Letter portrait; margin: 0.5in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: #1a1a1a;
+    font-size: 11pt;
+    line-height: 1.4;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .sheet { width: 100%; }
+
+  /* Header */
+  .head {
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+    border-bottom: 3px solid #1f2937; padding-bottom: 8px; margin-bottom: 14px;
+  }
+  .head h1 { font-size: 25pt; letter-spacing: -0.3px; line-height: 1.05; flex: 1 1 auto; }
+  /* SOP number badge — mirrors the section-number squares on the SOP index */
+  .sopnum {
+    flex: 0 0 auto; min-width: 48px; height: 44px; padding: 0 9px; border-radius: 9px;
+    background: #1f2937; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17pt; font-weight: 800; letter-spacing: -.5px;
+    margin-bottom: 3px;
+  }
+  .head h1 .eyebrow { display:block; font-size: 10pt; font-weight: 700; color:#6b7280; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 3px; }
+  .head .meta { font-size: 8.5pt; color: #555; text-align: right; line-height: 1.4; }
+  .head .meta b { color:#111827; }
+
+  .lead {
+    font-size: 10pt; color:#374151; background:#f3f4f6; border-left:4px solid #1f2937;
+    padding: 7px 11px; border-radius: 3px; margin-bottom: 14px;
+  }
+
+  /* Steps */
+  .step {
+    display: flex; gap: 11px; align-items: flex-start;
+    padding: 9px 0; break-inside: avoid;
+  }
+  .step + .step { border-top: 1px solid #e5e7eb; }
+  .n {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: #1f2937; color: #fff; font-size: 12pt; font-weight: 700;
+    margin-top: 1px;
+  }
+  .body h2 {
+    font-size: 11pt; text-transform: uppercase; letter-spacing: 0.3px;
+    color: #111827; margin-bottom: 3px;
+  }
+  .body p { font-size: 10.3pt; color:#1f2937; }
+  .body .note { font-size: 9pt; color:#6b7280; margin-top: 2px; }
+  b { color:#111827; }
+
+  .star { color:#dc2626; font-weight:700; }
+  .redtag {
+    display:inline-block; background:#fee2e2; color:#b91c1c; font-weight:700;
+    padding:0 5px; border-radius:3px; font-size:9.5pt; border:1px solid #fca5a5;
+  }
+  .friday {
+    display:inline-block; background:#1f2937; color:#fff; font-weight:700;
+    padding:0 6px; border-radius:3px; font-size:9.5pt;
+  }
+
+  /* Critical step highlight */
+  .hot .n { background:#b91c1c; }
+  .hot .body h2 { color:#b91c1c; }
+
+  .foot {
+    margin-top: 16px; border-top: 2px solid #1f2937; padding-top: 7px;
+    font-size: 8.5pt; color: #555; display:flex; justify-content:space-between; gap: 14px;
+  }
+  .foot span:last-child { flex: 0 0 auto; white-space: nowrap; }
+
+  /* Print button (screen only) */
+  .printbar {
+    position: fixed; top: 14px; right: 14px; z-index: 50;
+  }
+  .printbar button {
+    font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; font-weight: 700;
+    color: #fff; background: #1f2937; border: none; border-radius: 6px;
+    padding: 9px 16px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.25);
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .printbar button:hover { background: #374151; }
+  .printbar button svg { width: 15px; height: 15px; }
+
+  /* Screen framing so it reads like a sheet of paper */
+  @media screen {
+    body { background: #e5e7eb; padding: 24px 0; }
+    .sheet {
+      width: 8.5in; min-height: 11in; margin: 0 auto;
+      background: #fff; padding: 0.5in;
+      box-shadow: 0 4px 18px rgba(0,0,0,.18);
+    }
+  }
+
+  @media print {
+    html, body { background: #fff !important; }
+    .printbar { display: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="printbar">
+  <button onclick="window.print()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="6 9 6 2 18 2 18 9"></polyline>
+      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+      <rect x="6" y="14" width="12" height="8"></rect>
+    </svg>
+    Print
+  </button>
+</div>
+
+<div class="sheet">
+
+  <div class="head">
+    <span class="sopnum">1.3</span>
+    <h1><span class="eyebrow">Standard Operating Procedure</span>
+        Updating Project File Racks</h1>
+    <div class="meta">
+      <b>Rev:</b> 1.0<br>
+      <b>Cadence:</b> Weekly — after Friday Buy-In<br>
+      <b>Owner:</b> ____________
+    </div>
+  </div>
+
+  <div class="lead">
+    <b>Applies to the folder racks under the televisions in the production office.</b><br>
+    Keep the wall board, file dry boards, and file racks below the TV in sync with the
+    current production week. Cross-check every list against the <b>Optimizer / Releasability
+    spreadsheet</b> before posting.
+  </div>
+
+  <div class="step">
+    <span class="n">1</span>
+    <div class="body">
+      <h2>Update the wall dry board</h2>
+      <p>Update the dry board on the wall with the current <b>week #</b> and the <b>dates of the week</b>.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <span class="n">2</span>
+    <div class="body">
+      <h2>Label the file dry boards</h2>
+      <p>Label each file dry board with the <b>week #</b> and a list of <b>all projects that have
+      fabrication starting that week</b>.</p>
+      <p class="note">Cross-check the <b>Optimizer / Releasability spreadsheet</b> to confirm the list is accurate.</p>
+    </div>
+  </div>
+
+  <div class="step hot">
+    <span class="n">3</span>
+    <div class="body">
+      <h2>Flag not-released projects <span class="star">★</span></h2>
+      <p>Any project with a <b>not-released item</b> — <b>internal or external</b> — gets marked with a
+      <span class="star">RED star ★</span> next to its name.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <span class="n">4</span>
+    <div class="body">
+      <h2>Shift the files</h2>
+      <p>All files are <b>“shifted” / moved</b> after the <span class="friday">Buy-In meeting — every Friday</span>.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <span class="n">5</span>
+    <div class="body">
+      <h2>Hold red-sticker buy-in files</h2>
+      <p>Any buy-in files carrying <span class="redtag">RED stickers</span> (not-released items) <b>stay in the
+      office file rack</b> and are <b>placed on the desk</b> — so the outstanding items can be completed.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <span class="n">6</span>
+    <div class="body">
+      <h2>Re-rack after the plan meeting</h2>
+      <p>After the <b>1st or 2nd half plan meeting</b>, place files in the <b>file racks below the TV</b>
+      and <b>update the dry boards</b>.</p>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span><b>Bottom line:</b> Boards reflect the week, red star = not released, files shift every Friday, red-sticker files stay on the desk until cleared, then re-rack below the TV.</span>
+    <span><b>SOP 1.3</b> — Updating Project File Racks</span>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  var realFetch = window.fetch.bind(window);
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+  });
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="color-scheme" content="only light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOP Library</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: #1a1a1a; background: #e5e7eb; line-height: 1.4;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 32px 20px 48px; }
+
+  .head { border-bottom: 3px solid #1f2937; padding-bottom: 10px; margin-bottom: 24px; }
+  .head .eyebrow { font-size: 10pt; font-weight: 700; color:#6b7280; text-transform: uppercase; letter-spacing: 1.5px; }
+  .head h1 { font-size: 28pt; letter-spacing: -0.4px; line-height: 1.05; margin-top: 2px; }
+  .head p { font-size: 10.5pt; color:#4b5563; margin-top: 6px; }
+
+  /* ===== Section ===== */
+  .section { margin-bottom: 30px; }
+
+  .sechead {
+    display: flex; align-items: center; gap: 14px;
+    text-decoration: none; color: inherit;
+    border-bottom: 2px solid #1f2937; padding-bottom: 9px; margin-bottom: 13px;
+  }
+  a.sechead:hover .sectitle h2 { text-decoration: underline; }
+  .secnum {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 9px;
+    background: #1f2937; color:#fff; display:flex; align-items:center; justify-content:center;
+    font-size: 17pt; font-weight: 800;
+  }
+  .sectitle { flex: 1 1 auto; }
+  .sectitle h2 { font-size: 15.5pt; color:#111827; line-height: 1.12; }
+  .sectitle p { font-size: 9pt; color:#6b7280; margin-top: 3px; }
+  .ovpill {
+    flex: 0 0 auto; font-size: 8pt; font-weight: 800; letter-spacing: .6px; text-transform: uppercase;
+    color:#1f2937; border:1px solid #9ca3af; background:#fff; border-radius: 20px; padding: 3px 11px;
+  }
+  .sechead .arrow { flex: 0 0 auto; color:#9ca3af; font-size: 18pt; }
+
+  /* ===== Sub-item cards ===== */
+  .sublist { list-style: none; padding-left: 54px; }
+  .card {
+    display: flex; align-items: center; gap: 13px;
+    text-decoration: none; color: inherit;
+    background: #fff; border: 1px solid #d1d5db; border-radius: 8px;
+    padding: 12px 15px; margin-bottom: 9px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    transition: box-shadow .12s, border-color .12s, transform .12s;
+    position: relative;
+  }
+  /* Stretched link: makes a div.card fully clickable while allowing
+     sibling links (e.g. the PDF chip) to sit above it. */
+  .cardlink { color: inherit; text-decoration: none; }
+  .cardlink::after { content: ""; position: absolute; inset: 0; }
+  .card .pdf { position: relative; z-index: 1; }
+  .card:hover { border-color:#1f2937; box-shadow: 0 3px 10px rgba(0,0,0,.12); transform: translateY(-1px); }
+  .num {
+    flex: 0 0 auto; min-width: 46px; height: 38px; padding: 0 7px; border-radius: 7px;
+    background:#f3f4f6; color:#1f2937; border:1px solid #d1d5db;
+    display:flex; align-items:center; justify-content:center;
+    font-size: 12.5pt; font-weight: 800; letter-spacing: -.5px;
+  }
+  .card .txt { flex: 1 1 auto; }
+  .card .txt h3 { font-size: 12.5pt; color:#111827; font-weight: 700; }
+  .card .txt p { font-size: 9.3pt; color:#6b7280; margin-top: 2px; }
+  .card .pdf {
+    flex: 0 0 auto; font-size: 8.5pt; font-weight: 700; color:#b91c1c;
+    border:1px solid #fca5a5; background:#fee2e2; border-radius:4px; padding: 2px 7px; text-decoration:none;
+  }
+  .card .arrow { flex: 0 0 auto; color:#9ca3af; font-size: 15pt; }
+
+  .printall {
+    display: inline-flex; align-items: center; gap: 8px; margin-top: 12px;
+    font-size: 10pt; font-weight: 700; color: #fff; background: #1f2937;
+    border-radius: 6px; padding: 8px 15px; text-decoration: none;
+    box-shadow: 0 1px 4px rgba(0,0,0,.18);
+  }
+  .printall:hover { background: #374151; }
+  .printall svg { width: 14px; height: 14px; }
+
+  .tmpl { margin-top: 26px; padding-top: 16px; border-top: 1px dashed #9ca3af; }
+  .tmpl a { color:#1f2937; font-weight: 700; text-decoration: none; }
+  .tmpl a:hover { text-decoration: underline; }
+  .tmpl p { font-size: 9.5pt; color:#6b7280; margin-top: 4px; }
+
+  .foot { margin-top: 28px; font-size: 8.5pt; color:#6b7280; text-align:center; }
+
+  /* ===== Print: compact two-column contents sheet, one Letter page ===== */
+  @page { size: Letter portrait; margin: 0.4in; }
+  @media print {
+    html, body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .wrap { max-width: none; padding: 0; column-count: 2; column-gap: 22px; }
+    .head { column-span: all; margin-bottom: 10px; padding-bottom: 6px; }
+    .head h1 { font-size: 19pt; }
+    .head p, .printall, .tmpl, .ovpill,
+    .sechead .arrow, .card .arrow, .card .pdf { display: none; }
+    .section { margin-bottom: 9px; break-inside: avoid; }
+    .sechead { gap: 8px; padding-bottom: 4px; margin-bottom: 5px; border-bottom-width: 1.5px; }
+    .secnum { width: 23px; height: 23px; border-radius: 6px; font-size: 10.5pt; }
+    .sectitle h2 { font-size: 11pt; }
+    .sectitle p { display: none; }
+    .sublist { padding-left: 31px; }
+    .card {
+      padding: 3px 8px; margin-bottom: 4px; gap: 8px;
+      box-shadow: none; border-radius: 5px;
+    }
+    .num { min-width: 30px; height: 20px; padding: 0 5px; border-radius: 5px; font-size: 9pt; }
+    .card .txt h3 { font-size: 9.5pt; }
+    .card .txt p { font-size: 7.3pt; margin-top: 0; }
+    .foot { column-span: all; margin-top: 8px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <div class="eyebrow">Standard Operating Procedures</div>
+    <h1>SOP Library</h1>
+    <p>Grouped by area. Numbered section headers open the overview; each procedure is single-page and print-ready — open one and hit <b>Print</b>.</p>
+    <a class="printall" href="print-book.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 6 2 18 2 18 9"></polyline>
+        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+        <rect x="6" y="14" width="12" height="8"></rect>
+      </svg>
+      Print All — SOP Book (cover, contents &amp; every SOP in order)
+    </a>
+  </div>
+
+  <!-- ===== 0 · Company Operations Overview ===== -->
+  <div class="section">
+    <a class="sechead" href="company-operations-overview.html">
+      <span class="secnum">0</span>
+      <span class="sectitle">
+        <h2>From Sales to Shipping</h2>
+        <p>Company operations overview — the four departments, what each delivers, and the gates between them.</p>
+      </span>
+      <span class="ovpill">Overview</span>
+      <span class="arrow">&rsaquo;</span>
+    </a>
+  </div>
+
+  <!-- ===== 1 · Releasability Board ===== -->
+  <div class="section">
+    <a class="sechead" href="releasability-board.html">
+      <span class="secnum">1</span>
+      <span class="sectitle">
+        <h2>Releasability Board</h2>
+        <p>The board that clears jobs for production — full guide, plus its printed schedule &amp; rack outputs.</p>
+      </span>
+      <span class="ovpill">Overview</span>
+      <span class="arrow">&rsaquo;</span>
+    </a>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="casting-wall-creation.html">
+          <span class="num">1.1</span>
+          <span class="txt"><h3>Casting Wall Creation</h3>
+            <p>Print the 11×17 Board Schedule and post it on the casting wall. Weekly, before the upcoming week.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <a class="card" href="printing-folder-board-sheets.html">
+          <span class="num">1.2</span>
+          <span class="txt"><h3>Printing Folder Board Sheets</h3>
+            <p>Print Folder Board sheets from the Releasability Board and clip to the racks. Weekly / monthly.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <div class="card">
+          <span class="num">1.3</span>
+          <span class="txt"><h3><a class="cardlink" href="updating-project-file-racks.html">Updating Project File Racks</a></h3>
+            <p>Keep the wall board and file racks below the TV in sync. Weekly, after Friday Buy-In.</p></span>
+          <a class="pdf" href="updating-project-file-racks.pdf">PDF</a>
+          <span class="arrow">&rsaquo;</span>
+        </div>
+      </li>
+      <li>
+        <a class="card" href="create-jig-list.html">
+          <span class="num">1.4</span>
+          <span class="txt"><h3>Create Jig List &amp; Cross Section</h3>
+            <p>Draw up and list all screed jigs required to complete a casting in the Jig List Tool. Per casting, before release.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ===== 2 · Color Logs ===== -->
+  <div class="section">
+    <a class="sechead" href="color-logs.html">
+      <span class="secnum">2</span>
+      <span class="sectitle">
+        <h2>Color Logs</h2>
+        <p>The job's mix recipe in the Project Portal — fields, how to fill one out, presets, and printing.</p>
+      </span>
+      <span class="ovpill">Overview</span>
+      <span class="arrow">&rsaquo;</span>
+    </a>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="principles-of-batching.html">
+          <span class="num">2.1</span>
+          <span class="txt"><h3>Principles of Batching</h3>
+            <p>The rules behind the tickets — batch counts, FACE/BACK UP labeling, recipe scaling, and automatic material rules. Floor reference.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <a class="card" href="generate-batch-tickets.html">
+          <span class="num">2.2</span>
+          <span class="txt"><h3>Generate Batch Tickets</h3>
+            <p>Scale the Color Log recipe to a casting's volume and print one color-coded ticket per batch. Per casting, before cast day.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ===== 3 · End-of-Week Reporting ===== -->
+  <div class="section">
+    <div class="sechead" style="cursor:default">
+      <span class="secnum">3</span>
+      <span class="sectitle">
+        <h2>End-of-Week Reporting</h2>
+        <p>Daily and weekly production financials — actuals, frozen plans, and top-line sheets.</p>
+      </span>
+    </div>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="post-2pm-review.html">
+          <span class="num">3.1</span>
+          <span class="txt"><h3>Post 2:00 PM Review</h3>
+            <p>Record actual revenue, print tomorrow's Frozen, and log QA pass/fail results. Daily, after 2:00 PM.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <a class="card" href="print-end-of-week-top-line.html">
+          <span class="num">3.2</span>
+          <span class="txt"><h3>Print End-of-Week Top Line</h3>
+            <p>Print &amp; post Actual, Frozen, Delta, and COGS sheets. Weekly, end of week.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ===== 4 · Material Inflow Management ===== -->
+  <div class="section">
+    <a class="sechead" href="material-inflow-management.html">
+      <span class="secnum">4</span>
+      <span class="sectitle">
+        <h2>Material Inflow Management</h2>
+        <p>How the material loop fits together — the monthly bulk order and the weekly pull, in Inflow.</p>
+      </span>
+      <span class="ovpill">Overview</span>
+      <span class="arrow">&rsaquo;</span>
+    </a>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="create-sales-quote.html">
+          <span class="num">4.1</span>
+          <span class="txt"><h3>Create Sales Quote</h3>
+            <p>One Inflow quote per casting — all material Mill through Shipping, named by project + cast #. Per casting.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <a class="card" href="preparing-monthly-material-order.html">
+          <span class="num">4.2</span>
+          <span class="txt"><h3>Preparing Monthly Material Order</h3>
+            <p>Reconcile Inflow quotes to the month's Releasability report, then generate &amp; email the order. Monthly.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <a class="card" href="generate-weekly-project-sales-orders.html">
+          <span class="num">4.3</span>
+          <span class="txt"><h3>Generate Weekly Project Sales Orders</h3>
+            <p>One Inflow Sales Order per casting on the Phase Start report, dated next Monday. Weekly.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <a class="card" href="generate-pic-lists.html">
+          <span class="num">4.4</span>
+          <span class="txt"><h3>Generate Pic Lists</h3>
+            <p>Run the Inflow Product Sales report into a Facilities master + per-department Team Leader lists. Weekly.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <a class="card" href="send-weekly-material-usage-email.html">
+          <span class="num">4.5</span>
+          <span class="txt"><h3>Send Weekly Material Usage Email</h3>
+            <p>Pull the Actual Material Usage report from Inflow, save as PDF, email to Ops &amp; Accounting. Weekly.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ===== 5 · Optimizer Planning ===== -->
+  <div class="section">
+    <a class="sechead" href="optimizer-planning.html">
+      <span class="secnum">5</span>
+      <span class="sectitle">
+        <h2>Optimizer Planning</h2>
+        <p>How the labor estimate is built — castings → tasks → hours → Team Leader review → final baseline.</p>
+      </span>
+      <span class="ovpill">Overview</span>
+      <span class="arrow">&rsaquo;</span>
+    </a>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="creating-an-optimizer-plan.html">
+          <span class="num">5.1</span>
+          <span class="txt"><h3>Creating an Optimizer Plan</h3>
+            <p>The Optimizer Hours tab click-by-click — task lists, hours, copy/paste, print, and finalizing. Per project.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ===== 6 · Weekly Staging ===== -->
+  <div class="section">
+    <div class="sechead" style="cursor:default">
+      <span class="secnum">6</span>
+      <span class="sectitle">
+        <h2>Weekly Staging</h2>
+        <p>Pre-written task descriptions for the weekly board — what each department does, day by day.</p>
+      </span>
+    </div>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="inputting-staging.html">
+          <span class="num">6.1</span>
+          <span class="txt"><h3>Inputting Staging</h3>
+            <p>The Staging grid mechanics — casting pills, day columns, departments, copy/paste, autosave. Per casting.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+      <li>
+        <a class="card" href="mill-and-form-out-staging.html">
+          <span class="num">6.2</span>
+          <span class="txt"><h3>Mill and Form Out Staging</h3>
+            <p>What to write for Mill &amp; Form Out days so Management can track the day and Team Leaders can buy in. Weekly.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ===== 7 · Casting Layout ===== -->
+  <div class="section">
+    <div class="sechead" style="cursor:default">
+      <span class="secnum">7</span>
+      <span class="sectitle">
+        <h2>Casting Layout</h2>
+        <p>Planning where each form sits on the shop-floor casting tables — to scale, printed for the floor.</p>
+      </span>
+    </div>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="casting-layout.html">
+          <span class="num">7.1</span>
+          <span class="txt"><h3>Casting Layout</h3>
+            <p>Auto-pack a casting's forms onto the Area A/B tables, fine-tune by drag and rotate, and print the diagram. Per casting, before cast day.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ===== 8 · Form Construction ===== -->
+  <div class="section">
+    <div class="sechead" style="cursor:default">
+      <span class="secnum">8</span>
+      <span class="sectitle">
+        <h2>Form Construction</h2>
+        <p>What to build casting forms from and how to reinforce them — sheet stock, rails, brackets, tread strips.</p>
+      </span>
+    </div>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="form-construction.html">
+          <span class="num">8.1</span>
+          <span class="txt"><h3>Form Construction</h3>
+            <p>General guidelines — melamine vs HDO/Blackboard by cast count, bracing rails over 2", and Azek tread strips. Shop reference.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ===== 9 · Shop Folder ===== -->
+  <div class="section">
+    <div class="sechead" style="cursor:default">
+      <span class="secnum">9</span>
+      <span class="sectitle">
+        <h2>Shop Folder</h2>
+        <p>The physical folder that travels with each casting — standard contents, tab by tab.</p>
+      </span>
+    </div>
+    <ul class="sublist">
+      <li>
+        <a class="card" href="shop-folder-contents.html">
+          <span class="num">9.1</span>
+          <span class="txt"><h3>Shop Folder Contents</h3>
+            <p>Cover sheet &amp; sticker, then what files at each of the four tabs, left- and right-hand side. Per casting.</p></span>
+          <span class="arrow">&rsaquo;</span>
+        </a>
+      </li>
+    </ul>
+  </div>
+
+  <div class="tmpl">
+    <a href="binder-cover.html" target="_blank" rel="noopener">▤ Print the binder cover</a>
+    <p>Full-page cover sheet for the front sleeve of the SOP binder.</p>
+  </div>
+
+  <div class="foot">Weekly Schedule Viewer · Docs · SOP Library</div>
+
+</div>
+</body>
+</html>

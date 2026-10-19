@@ -1,0 +1,1320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  var realFetch = window.fetch.bind(window);
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+  });
+})();
+</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Portal - Weekly Schedule</title>
+
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E📁%3C/text%3E%3C/svg%3E">
+
+    <link rel="stylesheet" href="src/styles/variables.css">
+    <link rel="stylesheet" href="src/styles/base.css">
+    <link rel="stylesheet" href="src/styles/buttons.css">
+    <link rel="stylesheet" href="src/styles/project-portal.css?v=20261019-2">
+
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+</head>
+<body>
+    <div id="project-portal-app">
+
+        <!-- Top bar -->
+        <header class="pp-header">
+            <div class="pp-header-left">
+                <a href="index.html" class="pp-back-link" aria-label="Back to Weekly Schedule">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="19" y1="12" x2="5" y2="12"/>
+                        <polyline points="12 19 5 12 12 5"/>
+                    </svg>
+                    <span>Weekly Schedule</span>
+                </a>
+                <div class="pp-folder-tabs" role="tablist" aria-label="Portal sections">
+                    <div class="pp-folder-tab pp-folder-tab-active" role="tab" aria-selected="true" data-folder-tab="projects">Project Portal</div>
+                    <div class="pp-folder-tab" role="tab" aria-selected="false" data-folder-tab="recent-memos">Recent Memos</div>
+                    <div class="pp-folder-tab" role="tab" aria-selected="false" data-folder-tab="standard-colors">Standard Colors</div>
+                    <div class="pp-folder-tab pp-folder-tab-disabled" role="tab" aria-disabled="true" title="Coming soon">Shipping Log</div>
+                    <div class="pp-folder-tab pp-folder-tab-disabled" role="tab" aria-disabled="true" title="Coming soon">Spec. Vendor Log</div>
+                </div>
+            </div>
+            <div class="pp-header-right">
+                <a href="docs/sops/index.html" class="pp-link-btn" target="_blank" rel="noopener">SOPs</a>
+                <a href="releasability.html" class="pp-link-btn">Releasability Board</a>
+            </div>
+        </header>
+
+        <!-- LIST VIEW -->
+        <section id="pp-list-view" class="pp-view">
+            <div class="pp-list-controls">
+                <div class="pp-search-wrap">
+                    <svg class="pp-search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input type="text" id="pp-search" placeholder="Search by project # or name..." autocomplete="off" />
+                </div>
+                <button id="pp-print-list-btn" class="pp-secondary-btn">Print PM List</button>
+                <button id="pp-new-btn" class="pp-primary-btn">+ New Project</button>
+            </div>
+
+            <div class="pp-list-wrap">
+                <table class="pp-table">
+                    <thead>
+                        <tr id="pp-list-thead-row">
+                            <th data-sort-key="status" class="pp-sortable">Status</th>
+                            <th data-sort-key="project_number" class="pp-sortable">Project #</th>
+                            <th data-sort-key="project_name" class="pp-sortable">Project Name</th>
+                            <th data-sort-key="pm" class="pp-sortable">PM</th>
+                            <th data-sort-key="project_date" class="pp-sortable">Kickoff Date</th>
+                            <th data-sort-key="need_by_date" class="pp-sortable">Need By</th>
+                            <th data-sort-key="opt_start_date" class="pp-sortable">Optimizer Start Date</th>
+                            <th data-sort-key="opt_ship_date" class="pp-sortable">Next Opt. Ship Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pp-list-tbody">
+                        <tr><td colspan="8" class="pp-empty">Loading projects...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- RECENT MEMOS VIEW (cross-project feed) -->
+        <section id="pp-memos-view" class="pp-view" hidden>
+            <div class="pp-list-controls">
+                <div class="pp-search-wrap">
+                    <svg class="pp-search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input type="text" id="pp-rm-search" placeholder="Filter memos by project, body, or author..." autocomplete="off" />
+                </div>
+                <span id="pp-rm-count" class="pp-rm-count"></span>
+            </div>
+            <div class="pp-rm-wrap">
+                <div id="pp-rm-empty" class="pp-jm-empty" hidden>
+                    No memos yet across any project.
+                </div>
+                <div id="pp-rm-list" class="pp-jm-list"></div>
+            </div>
+        </section>
+
+        <!-- STANDARD COLORS VIEW -->
+        <section id="pp-standards-view" class="pp-view" hidden>
+            <div class="pp-sc-layout">
+                <aside class="pp-sc-sidebar">
+                    <div class="pp-sc-sidebar-head">
+                        <input type="text" id="pp-sc-search" class="pp-sc-search" placeholder="Filter standard colors..." autocomplete="off" />
+                        <button type="button" id="pp-sc-new" class="pp-sc-new-btn">+ New</button>
+                    </div>
+                    <div id="pp-sc-list" class="pp-sc-list"></div>
+                </aside>
+                <div class="pp-sc-main">
+                    <div id="pp-sc-empty" class="pp-sc-empty">Select a standard color on the left to edit it, or click <strong>+ New</strong> to create one.</div>
+                    <div id="pp-sc-editor" class="pp-sc-editor" hidden></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- FORM VIEW -->
+        <section id="pp-form-view" class="pp-view" hidden>
+            <div class="pp-form-controls">
+                <button id="pp-back-list-btn" class="pp-link-btn">&larr; Back to list</button>
+                <div class="pp-form-context">
+                    <span id="pp-form-context-num"></span>
+                    <span id="pp-form-context-name"></span>
+                    <select id="pp-phase-switcher" class="pp-phase-switcher" hidden aria-label="Active phase"></select>
+                </div>
+                <div class="pp-form-actions">
+                    <span id="pp-form-save-status" class="pp-cl-save-status" aria-live="polite"></span>
+                    <button id="pp-print-label-btn" class="pp-secondary-btn" hidden>Print Label</button>
+                    <button id="pp-print-shop-folder-btn" class="pp-secondary-btn" hidden>Print Shop Folder Cover</button>
+                    <button id="pp-print-btn" class="pp-secondary-btn">Print</button>
+                    <button id="pp-delete-btn" class="pp-danger-btn">Delete</button>
+                </div>
+            </div>
+
+            <div class="pp-form-shell">
+                <!-- Left sidebar tabs -->
+                <nav class="pp-sidebar" aria-label="Project sections">
+                    <button class="pp-tab-btn pp-tab-active" data-tab="info" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <line x1="12" y1="16" x2="12" y2="12"/>
+                            <line x1="12" y1="8" x2="12.01" y2="8"/>
+                        </svg>
+                        <span>Project Info</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="job-memos" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="8" y1="13" x2="16" y2="13"/>
+                            <line x1="8" y1="17" x2="13" y2="17"/>
+                        </svg>
+                        <span>Job Memos</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="castings" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="7" height="7"/>
+                            <rect x="14" y="3" width="7" height="7"/>
+                            <rect x="3" y="14" width="7" height="7"/>
+                            <rect x="14" y="14" width="7" height="7"/>
+                        </svg>
+                        <span>Casting Inventory</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="tracking" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 11l3 3L22 4"/>
+                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                        </svg>
+                        <span>Tracking</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="casting-layout" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="1"/>
+                            <line x1="3" y1="9" x2="21" y2="9"/>
+                            <line x1="9" y1="9" x2="9" y2="21"/>
+                            <rect x="11" y="11" width="7" height="4"/>
+                        </svg>
+                        <span>Casting Layout</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="jig-list" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 6h18v4H3z"/>
+                            <path d="M8 10h8v5H8z"/>
+                            <line x1="3" y1="19" x2="21" y2="19"/>
+                        </svg>
+                        <span>Jig List</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="shipping" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                            <line x1="12" y1="22.08" x2="12" y2="12"/>
+                        </svg>
+                        <span>Shipping</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="optimizer" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        <span>Optimizer Hours</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="approvals" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="4" width="18" height="16" rx="2"/>
+                            <polyline points="7 12 10.5 15.5 17 9"/>
+                        </svg>
+                        <span>Releasability Approvals</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="staging" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="4" y="4" width="16" height="16" rx="2"/>
+                            <line x1="8" y1="9" x2="16" y2="9"/>
+                            <line x1="8" y1="13" x2="16" y2="13"/>
+                            <line x1="8" y1="17" x2="13" y2="17"/>
+                        </svg>
+                        <span>Staging</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="color-log" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="13.5" cy="6.5" r="2.5"/>
+                            <circle cx="17.5" cy="10.5" r="2.5"/>
+                            <circle cx="8.5" cy="7.5" r="2.5"/>
+                            <circle cx="6.5" cy="12.5" r="2.5"/>
+                            <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>
+                        </svg>
+                        <span>Color Log</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="batch-tickets" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 2h6a2 2 0 0 1 2 2v2H7V4a2 2 0 0 1 2-2z"/>
+                            <path d="M5 6h14a1 1 0 0 1 1 1v14l-3-2-3 2-3-2-3 2-3-2-3 2V7a1 1 0 0 1 1-1z"/>
+                            <path d="M9 11h6M9 15h6M9 19h4"/>
+                        </svg>
+                        <span>Batch Tickets</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="cr-notes" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="4" width="18" height="14" rx="1"/>
+                            <line x1="3" y1="20" x2="21" y2="20"/>
+                            <line x1="7" y1="9" x2="13" y2="9"/>
+                            <line x1="7" y1="13" x2="11" y2="13"/>
+                        </svg>
+                        <span>Class Rooms</span>
+                    </button>
+                    <button class="pp-tab-btn" data-tab="actual-labor" type="button">
+                        <svg class="pp-tab-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        <span>Actual Labor</span>
+                    </button>
+                </nav>
+
+                <div class="pp-tab-content">
+                    <!-- Tab: Project Info -->
+                    <div class="pp-tab-panel pp-tab-panel-active" data-panel="info">
+                        <form id="pp-form" class="pp-form-sheet" autocomplete="off">
+                <!-- Status badge -->
+                <div class="pp-status-bar">
+                    <select id="pp-f-status" name="status" class="pp-status-select">
+                        <option value="Kicked Off">Kicked Off</option>
+                        <option value="Releasability">Releasability</option>
+                        <option value="Approved">Approved</option>
+                        <option value="In Production">In Production</option>
+                        <option value="Shipped">Shipped</option>
+                        <option value="Closed Out">Closed Out</option>
+                    </select>
+                    <label for="pp-f-pm" class="pp-pm-label">PM:</label>
+                    <select id="pp-f-pm" name="pm" class="pp-pm-select">
+                        <option value="">—</option>
+                        <option value="Tim">Tim</option>
+                        <option value="Islam">Islam</option>
+                        <option value="Ahmed">Ahmed</option>
+                    </select>
+                    <div class="pp-logo-mark">CWE</div>
+                </div>
+
+                <!-- Top identification block -->
+                <div class="pp-grid-2col">
+                    <div class="pp-field">
+                        <label>Project Name:</label>
+                        <input type="text" id="pp-f-project_name" name="project_name" />
+                    </div>
+                    <div class="pp-field">
+                        <label>Kickoff Date:</label>
+                        <input type="date" id="pp-f-project_date" name="project_date" />
+                    </div>
+
+                    <div class="pp-field">
+                        <label>Project #:</label>
+                        <input type="text" id="pp-f-project_number" name="project_number" required />
+                    </div>
+                    <div class="pp-field">
+                        <label>Project Address:</label>
+                        <textarea rows="2" id="pp-f-project_address" name="project_address"></textarea>
+                    </div>
+
+                    <div class="pp-field">
+                        <label>Estimator/Sales Manager:</label>
+                        <input type="text" id="pp-f-estimator" name="estimator" />
+                    </div>
+                    <div class="pp-field">
+                        <label>Architect:</label>
+                        <input type="text" id="pp-f-architect" name="architect" />
+                    </div>
+                </div>
+
+                <!-- Contact + Delivery -->
+                <div class="pp-grid-2col pp-section">
+                    <div class="pp-section-block">
+                        <h3 class="pp-section-title">Main Contact Information</h3>
+                        <div class="pp-field">
+                            <label>Name:</label>
+                            <input type="text" id="pp-f-contact_name" name="contact_name" />
+                        </div>
+                        <div class="pp-field">
+                            <label>Phone:</label>
+                            <input type="text" id="pp-f-contact_phone" name="contact_phone" />
+                        </div>
+                        <div class="pp-field">
+                            <label>Company Name:</label>
+                            <input type="text" id="pp-f-contact_company" name="contact_company" />
+                        </div>
+                        <div class="pp-field">
+                            <label>Email Address:</label>
+                            <input type="email" id="pp-f-contact_email" name="contact_email" />
+                        </div>
+                    </div>
+                    <div class="pp-section-block">
+                        <h3 class="pp-section-title">Delivery Information</h3>
+                        <div class="pp-field">
+                            <label>Site Contact:</label>
+                            <input type="text" id="pp-f-site_contact" name="site_contact" />
+                        </div>
+                        <div class="pp-field">
+                            <label>Phone:</label>
+                            <input type="text" id="pp-f-site_phone" name="site_phone" />
+                        </div>
+                        <div class="pp-field">
+                            <label>Delivery Address:</label>
+                            <textarea rows="2" id="pp-f-delivery_address" name="delivery_address"></textarea>
+                        </div>
+                        <div class="pp-field">
+                            <label>Site Restrictions:</label>
+                            <input type="text" id="pp-f-site_restrictions" name="site_restrictions" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dates -->
+                <div class="pp-grid-2col pp-section">
+                    <div class="pp-field">
+                        <label>Need By Date:</label>
+                        <div class="pp-date-combo">
+                            <input type="text" id="pp-f-need_by_date" name="need_by_date" placeholder="e.g., August 2025" />
+                            <button type="button" class="pp-date-pick-btn" id="pp-need_by_date-pick" title="Pick a date from the calendar" aria-label="Pick a date from the calendar">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                            </button>
+                            <input type="date" id="pp-need_by_date-picker" class="pp-date-pick-native" tabindex="-1" aria-hidden="true" />
+                        </div>
+                    </div>
+                    <div class="pp-field">
+                        <label>Production Start Date:</label>
+                        <input type="text" id="pp-f-production_start_date" name="production_start_date" placeholder="e.g., July" />
+                    </div>
+                </div>
+
+                <!-- Scope -->
+                <div class="pp-section pp-full">
+                    <h3 class="pp-section-title pp-section-title--full">Scope of Work</h3>
+                    <textarea id="pp-f-scope_of_work" name="scope_of_work" rows="5"></textarea>
+                </div>
+
+                <!-- Imperative -->
+                <div class="pp-section pp-full">
+                    <h3 class="pp-section-title pp-section-title--full">Imperative Information</h3>
+                    <textarea id="pp-f-imperative_information" name="imperative_information" rows="4"></textarea>
+                </div>
+
+                <!-- Phases -->
+                <div class="pp-section pp-full pp-phases-section">
+                    <h3 class="pp-section-title pp-section-title--full">Phases</h3>
+
+                    <div id="pp-phases-disabled-state" class="pp-phases-disabled">
+                        <p class="pp-muted">Split this project into phases (e.g. building wings, delivery waves) so castings, tracking, shipping, and optimizer hours each get a per-phase view. Color Log and Cover stay project-wide.</p>
+                        <button type="button" id="pp-phases-enable-btn" class="pp-phases-enable-btn">
+                            Enable Phases
+                        </button>
+                        <p class="pp-phases-warn-note">This is a one-way switch — once enabled, phases stay on for this project.</p>
+                    </div>
+
+                    <div id="pp-phases-enabled-state" class="pp-phases-enabled" hidden>
+                        <div class="pp-phases-status">
+                            <span class="pp-phases-badge">Phases Enabled</span>
+                            <span class="pp-muted">Use the phase tabs at the top of Castings, Tracking, Shipping, Optimizer Hours, and Batch Tickets to switch between phases.</span>
+                        </div>
+                        <div id="pp-phases-list" class="pp-phases-list"></div>
+                        <button type="button" id="pp-phases-add-btn" class="pp-phases-add-btn">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <line x1="12" y1="5" x2="12" y2="19"/>
+                                <line x1="5" y1="12" x2="19" y2="12"/>
+                            </svg>
+                            <span>Add Phase</span>
+                        </button>
+                    </div>
+                </div>
+                        </form>
+                    </div>
+
+                    <!-- Tab: Casting Inventory -->
+                    <div class="pp-tab-panel" data-panel="castings" hidden>
+                        <div class="pp-castings-wrap">
+                            <div class="pp-castings-header">
+                                <h2 class="pp-castings-title">Casting Inventory</h2>
+                                <p class="pp-muted pp-castings-sub">Manage castings for this project. Casting numbers are unique within the project.
+                                Use <b>Copy</b> on a casting to grab all its components — or a row's <b>Copy</b> for just that one — then <b>Paste</b> onto another casting.</p>
+                            </div>
+
+                            <div class="pp-tab-notes" id="pp-castings-notes-wrap">
+                                <label class="pp-tab-notes-label" for="pp-f-castings_notes">Notes</label>
+                                <textarea id="pp-f-castings_notes" class="pp-tab-notes-textarea" placeholder="Notes for this project's castings…"></textarea>
+                            </div>
+
+                            <div id="pp-castings-summary" class="pp-castings-summary" hidden>
+                                <div class="pp-cast-sum-card" title="Panels entered in inventory across all castings (quantity + extras), by component type">
+                                    <button type="button" class="pp-cast-sum-head" data-sum-toggle="total" aria-expanded="false">
+                                        <span class="pp-cast-sum-chev" aria-hidden="true">
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                                        </span>
+                                        <span class="pp-cast-sum-label"><b id="pp-cast-sum-total">0</b> panels in inventory</span>
+                                    </button>
+                                    <div class="pp-cast-sum-grid" id="pp-cast-sum-total-list" hidden></div>
+                                </div>
+                                <div class="pp-cast-sum-card pp-cast-sum-rej" title="Panels marked Rejected on the Tracking tab, by component type">
+                                    <button type="button" class="pp-cast-sum-head" data-sum-toggle="rejected" aria-expanded="false">
+                                        <span class="pp-cast-sum-chev" aria-hidden="true">
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                                        </span>
+                                        <span class="pp-cast-sum-label"><b id="pp-cast-sum-rejected">0</b> rejected</span>
+                                    </button>
+                                    <div class="pp-cast-sum-grid" id="pp-cast-sum-rejected-list" hidden></div>
+                                </div>
+                            </div>
+
+                            <div id="pp-castings-empty" class="pp-castings-empty" hidden>
+                                <p>No castings yet.</p>
+                            </div>
+
+                            <div id="pp-castings-list" class="pp-castings-list" hidden></div>
+
+                            <div class="pp-castings-add">
+                                <button id="pp-cast-add-btn" class="pp-add-btn" type="button">+ Add Casting</button>
+                                <button id="pp-cast-add-remake-btn" class="pp-add-btn pp-add-btn-remake" type="button" title="Build a new casting from rejected panels on existing castings">+ Add Remake Casting</button>
+                            </div>
+
+                            <div id="pp-castings-needs-save" class="pp-castings-hint" hidden>
+                                Save the project first to start adding castings.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Tracking -->
+                    <div class="pp-tab-panel" data-panel="tracking" hidden>
+                        <div class="pp-track-wrap">
+                            <div class="pp-track-header">
+                                <h2 class="pp-track-title">Tracking</h2>
+                                <p class="pp-muted pp-track-sub">To add, remove, or modify components, edit the Castings tab — Tracking updates automatically.</p>
+                            </div>
+
+                            <div id="pp-track-phases-bar" class="pp-track-phases-bar" hidden>
+                                <div class="pp-track-phases-hint">Click to toggle which phases appear on the tracking sheet.</div>
+                                <div class="pp-track-phases-row">
+                                    <span class="pp-track-phases-label">Track phases:</span>
+                                    <div id="pp-track-phases-chips" class="pp-track-phases-chips"></div>
+                                </div>
+                            </div>
+
+                            <div id="pp-track-needs-save" class="pp-castings-hint" hidden>
+                                Save the project first to use Tracking.
+                            </div>
+
+                            <div id="pp-track-no-castings" class="pp-opt-empty" hidden>
+                                <p>No castings yet.</p>
+                                <button class="pp-link-btn" type="button" data-action="goto-castings-from-tracking">Add a casting first &rarr;</button>
+                            </div>
+
+                            <div id="pp-track-editor" hidden>
+                                <div class="pp-track-list" id="pp-track-list"></div>
+                            </div>
+                        </div>
+                        <div id="pp-track-bulk-bar" class="pp-track-bulk-bar" hidden></div>
+                    </div>
+
+                    <!-- Tab: Casting Layout -->
+                    <div class="pp-tab-panel" data-panel="casting-layout" hidden>
+                        <div class="pp-clay-wrap">
+                            <div class="pp-clay-header">
+                                <h2 class="pp-clay-title">Casting Layout</h2>
+                                <p class="pp-muted pp-clay-sub">Auto-arranges a casting's panels onto the shop-floor tables. Panel sizes come from the Tracking sheet; the mold footprint adds the offset below to every edge. Drag a form to fine-tune its spot; double-click it or hover and press R to rotate. The first change saves a manual layout.</p>
+                            </div>
+
+                            <div id="pp-clay-needs-save" class="pp-castings-hint" hidden>
+                                Save the project first to view casting layouts.
+                            </div>
+
+                            <div id="pp-clay-no-castings" class="pp-opt-empty" hidden>
+                                <p>No castings yet.</p>
+                                <button class="pp-link-btn" type="button" data-action="goto-castings-from-tracking">Add a casting first &rarr;</button>
+                            </div>
+
+                            <div id="pp-clay-controls" class="pp-clay-controls" hidden>
+                                <label class="pp-clay-ctrl">
+                                    <span>Casting</span>
+                                    <select id="pp-clay-casting" class="pp-clay-select"></select>
+                                </label>
+                                <label class="pp-clay-ctrl">
+                                    <span>Casting area</span>
+                                    <select id="pp-clay-area" class="pp-clay-select">
+                                        <option value="B">Casting Area B</option>
+                                        <option value="A">Casting Area A</option>
+                                    </select>
+                                </label>
+                                <label class="pp-clay-ctrl">
+                                    <span>Mold offset (per side, in)</span>
+                                    <input type="number" id="pp-clay-offset" class="pp-clay-offset" min="0" step="0.25" value="4" />
+                                </label>
+                                <label class="pp-clay-ctrl">
+                                    <span>Space between forms (in)</span>
+                                    <input type="number" id="pp-clay-gap" class="pp-clay-offset" min="0" step="0.25" value="0" />
+                                </label>
+                                <button id="pp-clay-print-btn" class="pp-secondary-btn pp-clay-print" type="button">Print Layout</button>
+                                <button id="pp-clay-reset-btn" class="pp-secondary-btn pp-clay-reset" type="button" hidden>Reset to auto-pack</button>
+                            </div>
+
+                            <div id="pp-clay-error" class="pp-clay-error"></div>
+
+                            <div id="pp-clay-viewer" class="pp-clay-viewer" hidden>
+                                <div id="pp-clay-card" class="pp-clay-card"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Jig List -->
+                    <div class="pp-tab-panel" data-panel="jig-list" hidden>
+                        <div id="jig-list-root"></div>
+                    </div>
+
+                    <!-- Tab: Shipping -->
+                    <div class="pp-tab-panel" data-panel="shipping" hidden>
+                        <div class="pp-ship-wrap">
+                            <div class="pp-ship-header">
+                                <h2 class="pp-ship-title">Shipping</h2>
+                                <p class="pp-muted pp-ship-sub">Pick each panel's truck and crate number on the Tracking tab. Here you can move or renumber whole crates and print packing lists. Crate numbers can repeat from truck to truck.</p>
+                            </div>
+
+                            <div id="pp-ship-needs-save" class="pp-castings-hint" hidden>
+                                Save the project first to use Shipping.
+                            </div>
+
+                            <label class="pp-ship-qty-mode" title="When checked, identical panels collapse into a single &quot;type × count&quot; row instead of listing each panel individually. Affects both the on-screen view and the printed packing list.">
+                                <input type="checkbox" id="pp-ship-qty-mode" />
+                                <span>List as quantities — group identical panels into a single &ldquo;type &times; count&rdquo; row (applies to packing list print too)</span>
+                            </label>
+
+                            <div id="pp-ship-list" class="pp-ship-list"></div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Color Log -->
+                    <div class="pp-tab-panel" data-panel="color-log" hidden>
+                        <div id="pp-cl-needs-save" class="pp-castings-hint" hidden>
+                            Save the project first to use Color Log.
+                        </div>
+
+                        <div class="pp-cl-toolbar" id="pp-cl-toolbar" hidden>
+                            <div class="pp-cl-toolbar-row">
+                                <div class="pp-cl-toolbar-left">
+                                    <label for="pp-cl-preset-select" class="pp-cl-toolbar-label">Load Standard Color:</label>
+                                    <select id="pp-cl-preset-select" class="pp-cl-preset-select">
+                                        <option value="">— Choose color —</option>
+                                    </select>
+                                </div>
+                                <div class="pp-cl-toolbar-right">
+                                    <label class="pp-cl-multi-toggle" title="When on, this project can have more than one color log. Once enabled, can't be turned off.">
+                                        <input type="checkbox" id="pp-cl-multi-toggle">
+                                        <span>Multiple color logs</span>
+                                    </label>
+                                    <span id="pp-cl-save-status" class="pp-cl-save-status"></span>
+                                    <div class="pp-cl-menu" id="pp-cl-menu">
+                                        <button type="button" id="pp-cl-menu-btn" class="pp-cl-menu-btn" aria-haspopup="true" aria-expanded="false" aria-label="More actions" title="More actions">&#x22EF;</button>
+                                        <div class="pp-cl-menu-list" id="pp-cl-menu-list" role="menu" hidden>
+                                            <button type="button" id="pp-cl-save-preset-btn" class="pp-cl-menu-item" role="menuitem">Save as Standard Color</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="pp-cl-lock-banner" id="pp-cl-lock-banner" hidden>
+                                <span class="pp-cl-lock-text">&#128274; Locked to standard color: <strong id="pp-cl-lock-name"></strong>. These values match the standard and can't be edited.</span>
+                                <button type="button" id="pp-cl-clear-selection" class="pp-cl-clear-btn">Clear color log selection</button>
+                            </div>
+
+                            <div class="pp-cl-logs-bar" id="pp-cl-logs-bar" hidden>
+                                <div class="pp-cl-logs-pills" id="pp-cl-logs-pills"></div>
+                                <div class="pp-cl-logs-actions">
+                                    <button type="button" id="pp-cl-logs-add" class="pp-cl-logs-add-btn" title="Add a new color log">+ Add color log</button>
+                                    <button type="button" id="pp-cl-logs-delete" class="pp-cl-logs-delete-btn" title="Delete the active color log">Delete</button>
+                                </div>
+                            </div>
+
+                            <div class="pp-tab-notes" id="pp-color-log-notes-wrap">
+                                <label class="pp-tab-notes-label" for="pp-f-color_log_notes">Notes</label>
+                                <textarea id="pp-f-color_log_notes" class="pp-tab-notes-textarea" placeholder="Notes for this project's color log…"></textarea>
+                            </div>
+                        </div>
+
+                        <div class="pp-cl-wrap" id="pp-cl-wrap" hidden>
+                            <div class="pp-cl-paper">
+                                <!-- Header -->
+                                <div class="pp-cl-header">
+                                    <div>
+                                        <div class="pp-cl-title">COLOR LOG</div>
+                                        <div class="pp-cl-sub">Concreteworks East &mdash; Rev. 2025</div>
+                                    </div>
+                                    <div class="pp-cl-sample">
+                                        <span class="pp-cl-sample-label">Sample #:</span>
+                                        <input type="text" id="pp-cl-name" class="pp-cl-input pp-cl-input-lg" placeholder="Color Name">
+                                        <div class="pp-cl-sub" style="text-align:right;">* new standard master</div>
+                                    </div>
+                                </div>
+
+                                <!-- Info rows -->
+                                <div class="pp-cl-grid-2">
+                                    <div class="pp-cl-field"><span class="pp-cl-label">Temperature:</span><input type="text" id="pp-cl-temp" class="pp-cl-input"></div>
+                                    <div class="pp-cl-field"><span class="pp-cl-label">Project:</span><input type="text" id="pp-cl-project" class="pp-cl-input" readonly title="Auto-filled from project info"></div>
+                                </div>
+                                <div class="pp-cl-grid-2">
+                                    <div class="pp-cl-field"><span class="pp-cl-label">Date:</span><input type="date" id="pp-cl-date" class="pp-cl-input"></div>
+                                    <div class="pp-cl-field"><span class="pp-cl-label">Made By:</span><input type="text" id="pp-cl-madeby" class="pp-cl-input"></div>
+                                </div>
+
+                                <!-- Standard / Custom -->
+                                <div class="pp-cl-std-row">
+                                    <div class="pp-cl-cb-tag">
+                                        <span class="pp-cl-tag" data-cl-std="true">STANDARD</span>
+                                        <span class="pp-cl-tag-box checked" id="pp-cl-std-box" data-cl-std="true"></span>
+                                        <span class="pp-cl-tag" data-cl-std="false" style="margin-left:30px;">CUSTOM</span>
+                                        <span class="pp-cl-tag-box" id="pp-cl-cust-box" data-cl-std="false"></span>
+                                    </div>
+                                </div>
+
+                                <!-- Cement Type -->
+                                <div class="pp-cl-cb-row">
+                                    <span class="pp-cl-label" style="font-weight:700;">Cement Type:</span>
+                                    <label class="pp-cl-cb"><input type="radio" name="pp-cl-cement" value="white" checked><span class="pp-cl-checkbox"></span> White Portland</label>
+                                    <label class="pp-cl-cb"><input type="radio" name="pp-cl-cement" value="gray"><span class="pp-cl-checkbox"></span> Gray Portland</label>
+                                    <label class="pp-cl-cb"><input type="radio" name="pp-cl-cement" value="other"><span class="pp-cl-checkbox"></span> Other</label>
+                                </div>
+
+                                <div class="pp-cl-divider"></div>
+
+                                <!-- Base Ingredients + Additives -->
+                                <div class="pp-cl-2col">
+                                    <div class="pp-cl-col-left">
+                                        <table class="pp-cl-ing-table" id="pp-cl-base-table">
+                                            <thead><tr><th>Ingredient</th><th style="width:20%;">Weight</th><th style="width:22%;">Unit</th><th style="width:20%;">Note</th><th class="pp-cl-col-action"></th></tr></thead>
+                                            <tbody></tbody>
+                                        </table>
+                                        <button class="pp-cl-btn-add" type="button" data-cl-add="base">+ Add Ingredient</button>
+                                    </div>
+                                    <div class="pp-cl-col-right">
+                                        <table class="pp-cl-ing-table" id="pp-cl-additives-table">
+                                            <thead><tr><th>Additive</th><th style="width:20%;">Amount</th><th style="width:22%;">Unit</th><th style="width:20%;">Note</th><th class="pp-cl-col-action"></th></tr></thead>
+                                            <tbody></tbody>
+                                        </table>
+                                        <button class="pp-cl-btn-add" type="button" data-cl-add="additive">+ Add Additive</button>
+                                    </div>
+                                </div>
+
+                                <!-- Cast Method -->
+                                <div class="pp-cl-cb-row pp-cl-cb-row-bordered">
+                                    <span class="pp-cl-label" style="font-weight:700;">Cast Method:</span>
+                                    <label class="pp-cl-cb"><input type="radio" name="pp-cl-cast" value="sprayUp" checked><span class="pp-cl-checkbox"></span> Spray Up</label>
+                                    <label class="pp-cl-cb"><input type="radio" name="pp-cl-cast" value="directCast"><span class="pp-cl-checkbox"></span> Direct Cast</label>
+                                    <label class="pp-cl-cb"><input type="radio" name="pp-cl-cast" value="other"><span class="pp-cl-checkbox"></span> Other</label>
+                                </div>
+
+                                <!-- Aggregates + Pigments -->
+                                <div class="pp-cl-2col">
+                                    <div class="pp-cl-col-left">
+                                        <div class="pp-cl-sect-label">Aggregates:</div>
+                                        <table class="pp-cl-ing-table" id="pp-cl-aggregates-table">
+                                            <thead><tr><th>Name</th><th style="width:30%;">Amount</th><th style="width:28%;">Unit</th><th class="pp-cl-col-action"></th></tr></thead>
+                                            <tbody></tbody>
+                                        </table>
+                                        <button class="pp-cl-btn-add" type="button" data-cl-add="aggregate">+ Add Aggregate</button>
+                                    </div>
+                                    <div class="pp-cl-col-right">
+                                        <div class="pp-cl-sect-label">Pigments:</div>
+                                        <table class="pp-cl-ing-table" id="pp-cl-pigments-table">
+                                            <thead><tr><th style="width:22%;">Pigment</th><th style="width:20%;">%</th><th style="width:20%;">Weight</th><th style="width:24%;">Unit</th><th class="pp-cl-col-action"></th></tr></thead>
+                                            <tbody></tbody>
+                                        </table>
+                                        <button class="pp-cl-btn-add" type="button" data-cl-add="pigment">+ Add Pigment</button>
+                                    </div>
+                                </div>
+
+                                <!-- Grout + Fill Coat -->
+                                <div class="pp-cl-2col">
+                                    <div class="pp-cl-col-left">
+                                        <div class="pp-cl-sect-label">Grout Type:</div>
+                                        <table class="pp-cl-ing-table" id="pp-cl-grout-table">
+                                            <thead><tr><th>Grout Name</th><th style="width:30%;">Ratio %</th><th class="pp-cl-col-action"></th></tr></thead>
+                                            <tbody></tbody>
+                                        </table>
+                                        <button class="pp-cl-btn-add" type="button" data-cl-add="grout">+ Add Grout</button>
+                                    </div>
+                                    <div class="pp-cl-col-right">
+                                        <div class="pp-cl-sect-label">Fill Coat:</div>
+                                        <table class="pp-cl-ing-table" id="pp-cl-fillcoat-table">
+                                            <thead><tr><th style="width:22%;">Fill Pigment</th><th style="width:20%;">%</th><th style="width:20%;">Weight</th><th style="width:24%;">Unit</th><th class="pp-cl-col-action"></th></tr></thead>
+                                            <tbody></tbody>
+                                        </table>
+                                        <button class="pp-cl-btn-add" type="button" data-cl-add="fillCoat">+ Add Fill Pigment</button>
+                                    </div>
+                                </div>
+
+                                <div class="pp-cl-divider"></div>
+
+                                <!-- Notes -->
+                                <div class="pp-cl-2col">
+                                    <div class="pp-cl-col-left">
+                                        <div class="pp-cl-sect-label">Finishing Notes:</div>
+                                        <textarea id="pp-cl-finishing-notes" class="pp-cl-textarea" rows="4"></textarea>
+                                    </div>
+                                    <div class="pp-cl-col-right">
+                                        <div class="pp-cl-sect-label">Sealing Notes:</div>
+                                        <textarea id="pp-cl-sealing-notes" class="pp-cl-textarea" rows="4"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Job Memos -->
+                    <div class="pp-tab-panel" data-panel="job-memos" hidden>
+                        <div id="pp-jm-needs-save" class="pp-castings-hint" hidden>
+                            Save the project first to use Job Memos.
+                        </div>
+
+                        <div class="pp-jm-toolbar" id="pp-jm-toolbar" hidden>
+                            <button type="button" id="pp-jm-add" class="pp-jm-add-btn">+ Add Memo</button>
+                            <span class="pp-jm-count" id="pp-jm-count"></span>
+                            <span class="pp-jm-save-status" id="pp-jm-save-status"></span>
+                        </div>
+
+                        <div class="pp-jm-wrap" id="pp-jm-wrap" hidden>
+                            <div class="pp-jm-empty" id="pp-jm-empty" hidden>
+                                No memos yet — click <strong>+ Add Memo</strong> to start the log.
+                            </div>
+                            <div class="pp-jm-list" id="pp-jm-list"></div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Batch Tickets -->
+                    <div class="pp-tab-panel" data-panel="batch-tickets" hidden>
+                        <div class="pp-bt-wrap">
+                            <div id="pp-bt-needs-save" class="pp-castings-hint" hidden>
+                                Save the project first to use Batch Tickets.
+                            </div>
+
+                            <div id="pp-bt-needs-color-log" class="pp-castings-hint" hidden>
+                                Create a color log for this project first — batch tickets scale ingredients from it.
+                            </div>
+
+                            <div id="pp-bt-no-castings" class="pp-castings-hint" hidden>
+                                No castings yet. Add a casting first.
+                            </div>
+
+                            <!-- Projects batched on a dedicated page (config/special-batching.js): that page is
+                                 shown here, embedded, INSTEAD of the standard batching form below. Hidden for
+                                 every other project. See renderSpecialBatching() in project-portal-page.js. -->
+                            <div class="pp-bt-special" id="pp-bt-special" hidden>
+                                <iframe class="pp-bt-special-frame" id="pp-bt-special-frame" title="Batch tickets for this project" scrolling="no"></iframe>
+                                <a class="pp-bt-special-popout" id="pp-bt-special-popout" href="#" target="_blank" rel="noopener">Open this batching page in its own window &#8599;</a>
+                            </div>
+
+                            <!-- Project-wide slump targets (in), by batch type. Drive every ticket's slump graphic. -->
+                            <div class="pp-bt-slump-targets" id="pp-bt-slump-targets" hidden>
+                                <div class="pp-bt-slump-targets-head">
+                                    <span class="pp-bt-slump-targets-title">Target Slump</span>
+                                    <span class="pp-bt-slump-targets-sub">project-wide · inches of spread</span>
+                                </div>
+                                <div class="pp-bt-slump-targets-fields">
+                                    <label class="pp-bt-slump-target">
+                                        <span class="pp-bt-slump-target-label">Face Mix</span>
+                                        <span class="pp-bt-slump-target-input"><input type="number" id="pp-bt-slump-face" min="1" max="10" step="0.25" placeholder="5"><span class="pp-bt-slump-unit">&Prime;</span></span>
+                                    </label>
+                                    <label class="pp-bt-slump-target">
+                                        <span class="pp-bt-slump-target-label">First Back Up</span>
+                                        <span class="pp-bt-slump-target-input"><input type="number" id="pp-bt-slump-first" min="1" max="10" step="0.25" placeholder="5"><span class="pp-bt-slump-unit">&Prime;</span></span>
+                                    </label>
+                                    <label class="pp-bt-slump-target">
+                                        <span class="pp-bt-slump-target-label">FINAL Back Up</span>
+                                        <span class="pp-bt-slump-target-input"><input type="number" id="pp-bt-slump-final" min="1" max="10" step="0.25" placeholder="5"><span class="pp-bt-slump-unit">&Prime;</span></span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="pp-bt-pills" id="pp-bt-pills"></div>
+                            <div id="pp-bt-content"></div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Optimizer Hours -->
+                    <div class="pp-tab-panel" data-panel="optimizer" hidden>
+                        <div class="pp-opt-wrap">
+                            <div class="pp-opt-header">
+                                <h2 class="pp-opt-title">Optimizer Hours</h2>
+                                <p class="pp-muted pp-opt-sub">Designate manhours per task for each casting. Tasks are shared across the project; hours are per casting.</p>
+                            </div>
+
+                            <div class="pp-tab-notes" id="pp-optimizer-notes-wrap">
+                                <label class="pp-tab-notes-label" for="pp-f-optimizer_notes">Notes</label>
+                                <textarea id="pp-f-optimizer_notes" class="pp-tab-notes-textarea" placeholder="Notes for hours / optimization…"></textarea>
+                            </div>
+
+                            <!-- Empty state: project not saved yet -->
+                            <div id="pp-opt-needs-save" class="pp-castings-hint" hidden>
+                                Save the project first to use Optimizer Hours.
+                            </div>
+
+                            <!-- Empty state: no castings -->
+                            <div id="pp-opt-no-castings" class="pp-opt-empty" hidden>
+                                <p>No castings yet.</p>
+                                <button class="pp-link-btn" type="button" data-action="goto-castings">Add a casting first &rarr;</button>
+                            </div>
+
+                            <!-- Active editor -->
+                            <div id="pp-opt-editor" hidden>
+                                <!-- Casting pills -->
+                                <div class="pp-opt-pills" id="pp-opt-pills"></div>
+
+                                <!-- 3-column casting workspace (each column has its own + Add Task button) -->
+                                <div class="pp-opt-columns" id="pp-opt-columns"></div>
+
+                                <!-- Grand total -->
+                                <div class="pp-opt-total-card pp-opt-grand-total">
+                                    <span class="pp-opt-total-label">Grand Total</span>
+                                    <span class="pp-opt-total-value"><strong id="pp-opt-grand-total">0</strong> hrs</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Staging (pre-author task descriptions per casting) -->
+                    <div class="pp-tab-panel" data-panel="approvals" hidden>
+                        <div class="pp-opt-wrap">
+                            <div class="pp-opt-header">
+                                <h2 class="pp-opt-title">Releasability Approvals</h2>
+                                <p class="pp-muted pp-opt-sub">The PM sign-offs from the Releasability Board, per casting. Click a cell to flip it; the board follows.</p>
+                            </div>
+                            <div id="pp-appr-needs-save" class="pp-castings-hint" hidden>Save the project first.</div>
+                            <div id="pp-appr-no-castings" class="pp-castings-hint" hidden>No castings yet &mdash; add castings first.</div>
+                            <div id="pp-appr-table" class="pp-appr-table"></div>
+                        </div>
+                    </div>
+                    <div class="pp-tab-panel" data-panel="staging" hidden>
+                        <div class="pp-opt-wrap">
+                            <div class="pp-opt-header">
+                                <h2 class="pp-opt-title">Staging</h2>
+                                <p class="pp-muted pp-opt-sub">Pre-author task descriptions per casting, by department and day. Shared with the weekly board &mdash; descriptions match scheduled tasks by casting, department and day order.</p>
+                            </div>
+
+                            <!-- Empty state: project not saved yet -->
+                            <div id="pp-stg-needs-save" class="pp-castings-hint" hidden>
+                                Save the project first to use Staging.
+                            </div>
+
+                            <!-- Empty state: no castings -->
+                            <div id="pp-stg-no-castings" class="pp-opt-empty" hidden>
+                                <p>No castings yet.</p>
+                                <button class="pp-link-btn" type="button" data-action="goto-castings">Add a casting first &rarr;</button>
+                            </div>
+
+                            <!-- Active editor -->
+                            <div id="pp-stg-editor" hidden>
+                                <!-- Casting pills -->
+                                <div class="pp-opt-pills" id="pp-stg-pills"></div>
+
+                                <!-- Per-casting columns: department × day description grid -->
+                                <div class="pp-opt-columns" id="pp-stg-columns"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: CR Notes (Classroom Notes) -->
+                    <div class="pp-tab-panel" data-panel="cr-notes" hidden>
+                        <div class="pp-cr-wrap">
+                            <div class="pp-cr-header">
+                                <h2 class="pp-cr-title">Class Rooms</h2>
+                                <p class="pp-muted pp-cr-sub">Switch between classrooms to capture per-classroom notes. General Notes are shared across all three. The cell beside each classroom is its Releasability Board check for this job &mdash; click it here or on the board.</p>
+                            </div>
+
+                            <!-- Classroom sub-tabs -->
+                            <div class="pp-cr-subtabs" role="tablist" aria-label="Classroom">
+                                <button type="button" class="pp-cr-subtab pp-cr-subtab-active" data-classroom="1" role="tab" aria-selected="true">
+                                    <span class="pp-cr-badge">1</span>
+                                    <span>Classroom 1</span>
+                                </button>
+                                <span class="pp-cr-ms" data-cr-ms="1"></span>
+                                <button type="button" class="pp-cr-subtab" data-classroom="2" role="tab" aria-selected="false">
+                                    <span class="pp-cr-badge">2</span>
+                                    <span>Classroom 2</span>
+                                </button>
+                                <span class="pp-cr-ms" data-cr-ms="2"></span>
+                                <button type="button" class="pp-cr-subtab" data-classroom="3" role="tab" aria-selected="false">
+                                    <span class="pp-cr-badge">3</span>
+                                    <span>Classroom 3</span>
+                                </button>
+                                <span class="pp-cr-ms" data-cr-ms="3"></span>
+                            </div>
+
+                            <!-- One classroom panel visible at a time -->
+                            <div class="pp-cr-classroom-panels">
+                                <div class="pp-cr-classroom-panel pp-cr-classroom-panel-active" data-classroom-panel="1">
+                                    <div class="pp-cr-agenda">
+                                        <div class="pp-cr-agenda-header">
+                                            <h3 class="pp-cr-agenda-title">Classroom 1 Agenda</h3>
+                                            <span class="pp-cr-agenda-meta">Standard kickoff checklist</span>
+                                        </div>
+                                        <ol class="pp-cr-agenda-list">
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">1</span><span class="pp-cr-agenda-text">Overview arch drawings and establish classification of project</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">2</span><span class="pp-cr-agenda-text">Discuss sample, mix and finishing notes</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">3</span><span class="pp-cr-agenda-text">Review batching ticket from Sales &mdash; confirm specialty aggregates</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">4</span><span class="pp-cr-agenda-text">Review number of castings &mdash; confirm if casting layout is required</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">5</span><span class="pp-cr-agenda-text">Introduce general project buildability (reuse or 1:1)</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">6</span><span class="pp-cr-agenda-text">Review Optimizer hours</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">7</span><span class="pp-cr-agenda-text">Review Sales Inflow Ticket &mdash; break out into phases</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">8</span><span class="pp-cr-agenda-text">Discuss need for &ldquo;3D Drawings / Parts List&rdquo; <span class="pp-cr-agenda-tag">Review in Classroom 2</span></span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">9</span><span class="pp-cr-agenda-text">Confirm if 3D drawings for crates are needed</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">10</span><span class="pp-cr-agenda-text">Confirm any specialty material or subs required</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">11</span><span class="pp-cr-agenda-text">Review fabrication steps / rough draft tracking sheet</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">12</span><span class="pp-cr-agenda-text">Type of shop drawings and need for additional tickets</span></li>
+                                        </ol>
+                                    </div>
+                                    <div class="pp-cr-tasks-wrap" data-classroom-tasks="1">
+                                        <div class="pp-cr-tasks-header">
+                                            <h3 class="pp-cr-tasks-title">Tasks</h3>
+                                        </div>
+                                        <div id="pp-cr-tasks-needs-save-1" class="pp-castings-hint" hidden>
+                                            Save the project first to start adding tasks.
+                                        </div>
+                                        <div id="pp-cr-tasks-empty-1" class="pp-cr-tasks-empty" hidden>
+                                            <p>No tasks yet.</p>
+                                        </div>
+                                        <div id="pp-cr-tasks-list-1" class="pp-cr-tasks-list" hidden></div>
+                                        <div class="pp-cr-tasks-add">
+                                            <button class="pp-add-btn" type="button" data-cr-add-task="1">+ Add Task</button>
+                                        </div>
+                                    </div>
+                                    <textarea id="pp-f-classroom_1_notes" class="pp-cr-textarea pp-cr-textarea--classroom" placeholder="Notes from Classroom 1…"></textarea>
+                                </div>
+                                <div class="pp-cr-classroom-panel" data-classroom-panel="2" hidden>
+                                    <div class="pp-cr-agenda">
+                                        <div class="pp-cr-agenda-header">
+                                            <h3 class="pp-cr-agenda-title">Classroom 2 Agenda</h3>
+                                            <span class="pp-cr-agenda-meta">Standard mid-project checklist</span>
+                                        </div>
+                                        <ol class="pp-cr-agenda-list">
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">1</span><span class="pp-cr-agenda-text">Review CWE shop drawings</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">2</span><span class="pp-cr-agenda-text">Review 3D drawings and parts list</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">3</span><span class="pp-cr-agenda-text">Review material usage and specialty PO&rsquo;s</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">4</span><span class="pp-cr-agenda-text">Review phased Inflow tickets per casting</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">5</span><span class="pp-cr-agenda-text">Review sample color and finish in depth so casting/finishing crew are educated</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">6</span><span class="pp-cr-agenda-text">Review draft of tracking sheet &mdash; confirm accurate with team leaders</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">7</span><span class="pp-cr-agenda-text">Make changes live to QA as required &mdash; use tracking sheet as template</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">8</span><span class="pp-cr-agenda-text">Modify Optimizer hours per feedback from Team Leaders</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">9</span><span class="pp-cr-agenda-text">Generate casting layout</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">10</span><span class="pp-cr-agenda-text">Review 3D drawings of crates and sizes</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">11</span><span class="pp-cr-agenda-text">Review batching tickets for each casting &mdash; include face and backup mix</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">12</span><span class="pp-cr-agenda-text">Confirm if finishing layout is required &mdash; start rough draft</span></li>
+                                        </ol>
+                                    </div>
+                                    <div class="pp-cr-tasks-wrap" data-classroom-tasks="2">
+                                        <div class="pp-cr-tasks-header">
+                                            <h3 class="pp-cr-tasks-title">Tasks</h3>
+                                        </div>
+                                        <div id="pp-cr-tasks-needs-save-2" class="pp-castings-hint" hidden>
+                                            Save the project first to start adding tasks.
+                                        </div>
+                                        <div id="pp-cr-tasks-empty-2" class="pp-cr-tasks-empty" hidden>
+                                            <p>No tasks yet.</p>
+                                        </div>
+                                        <div id="pp-cr-tasks-list-2" class="pp-cr-tasks-list" hidden></div>
+                                        <div class="pp-cr-tasks-add">
+                                            <button class="pp-add-btn" type="button" data-cr-add-task="2">+ Add Task</button>
+                                        </div>
+                                    </div>
+                                    <textarea id="pp-f-classroom_2_notes" class="pp-cr-textarea pp-cr-textarea--classroom" placeholder="Notes from Classroom 2…"></textarea>
+                                </div>
+                                <div class="pp-cr-classroom-panel" data-classroom-panel="3" hidden>
+                                    <div class="pp-cr-agenda">
+                                        <div class="pp-cr-agenda-header">
+                                            <h3 class="pp-cr-agenda-title">Classroom 3 Agenda</h3>
+                                            <span class="pp-cr-agenda-meta">Standard pre-production checklist</span>
+                                        </div>
+                                        <ol class="pp-cr-agenda-list">
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">1</span><span class="pp-cr-agenda-text">Review shop folder checklist &mdash; all items to be complete before EOD</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">2</span><span class="pp-cr-agenda-text">Review final production drawings / parts list &mdash; check for any missing details</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">3</span><span class="pp-cr-agenda-text">Review final 3D drawings / parts list &mdash; confirm Cover Sheet is present with material totals needed</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">4</span><span class="pp-cr-agenda-text">Review casting layout completed</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">5</span><span class="pp-cr-agenda-text">Review all batching tickets &mdash; confirm complete and accurate</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">6</span><span class="pp-cr-agenda-text">Confirm final QA is accurate and matches tracking sheet</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">7</span><span class="pp-cr-agenda-text">Finalize Optimizer hours &mdash; confirmed based off feedback from Team Leaders</span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">8</span><span class="pp-cr-agenda-text">Confirm crate sizes and quantities for each project &mdash; complete in homework meeting on Wed <span class="pp-cr-agenda-tag">Homework</span></span></li>
+                                            <li class="pp-cr-agenda-item"><span class="pp-cr-agenda-num">9</span><span class="pp-cr-agenda-text">Review final tracking sheet &mdash; confirm accurate and cross-check against QA check points</span></li>
+                                        </ol>
+                                    </div>
+                                    <div class="pp-cr-tasks-wrap" data-classroom-tasks="3">
+                                        <div class="pp-cr-tasks-header">
+                                            <h3 class="pp-cr-tasks-title">Tasks</h3>
+                                        </div>
+                                        <div id="pp-cr-tasks-needs-save-3" class="pp-castings-hint" hidden>
+                                            Save the project first to start adding tasks.
+                                        </div>
+                                        <div id="pp-cr-tasks-empty-3" class="pp-cr-tasks-empty" hidden>
+                                            <p>No tasks yet.</p>
+                                        </div>
+                                        <div id="pp-cr-tasks-list-3" class="pp-cr-tasks-list" hidden></div>
+                                        <div class="pp-cr-tasks-add">
+                                            <button class="pp-add-btn" type="button" data-cr-add-task="3">+ Add Task</button>
+                                        </div>
+                                    </div>
+                                    <textarea id="pp-f-classroom_3_notes" class="pp-cr-textarea pp-cr-textarea--classroom" placeholder="Notes from Classroom 3…"></textarea>
+                                </div>
+                            </div>
+
+                            <!-- General Notes — always visible, shared across classrooms -->
+                            <div class="pp-cr-card pp-cr-card--general">
+                                <div class="pp-cr-card-header">
+                                    <svg class="pp-cr-card-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                                    </svg>
+                                    <h3 class="pp-cr-card-title">General Notes</h3>
+                                    <span class="pp-cr-card-meta">Shared across all classrooms</span>
+                                </div>
+                                <textarea id="pp-f-cr_general_notes" class="pp-cr-textarea" placeholder="General project-level notes…"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Actual Labor -->
+                    <div class="pp-tab-panel" data-panel="actual-labor" hidden>
+                        <div id="pp-actual-labor-container" class="pp-actual-labor">
+                            <div class="pp-actual-labor-empty">Loading…</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- New Project Modal -->
+        <div id="pp-new-modal" class="pp-modal-backdrop" hidden>
+            <div class="pp-modal" role="dialog" aria-modal="true" aria-labelledby="pp-new-modal-title">
+                <div class="pp-modal-header">
+                    <h2 id="pp-new-modal-title">New Project</h2>
+                    <button type="button" class="pp-modal-close" id="pp-new-modal-close" aria-label="Close">&times;</button>
+                </div>
+                <form id="pp-new-modal-form" class="pp-modal-body">
+                    <label class="pp-field">
+                        <span class="pp-field-label">Project # <span class="pp-field-req">*</span></span>
+                        <input type="text" id="pp-new-modal-num" required autocomplete="off" />
+                        <span class="pp-field-error" id="pp-new-modal-num-err" hidden></span>
+                    </label>
+                    <label class="pp-field">
+                        <span class="pp-field-label">Project Name</span>
+                        <input type="text" id="pp-new-modal-name" autocomplete="off" />
+                    </label>
+                    <div class="pp-modal-actions">
+                        <button type="button" class="pp-secondary-btn" id="pp-new-modal-cancel">Cancel</button>
+                        <button type="submit" class="pp-primary-btn">Create</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Save Standard Color Modal -->
+        <div id="pp-cl-preset-modal" class="pp-modal-backdrop" hidden>
+            <div class="pp-modal" role="dialog" aria-modal="true" aria-labelledby="pp-cl-preset-modal-title">
+                <div class="pp-modal-header">
+                    <h2 id="pp-cl-preset-modal-title">Save as Standard Color</h2>
+                    <button type="button" class="pp-modal-close" id="pp-cl-preset-modal-close" aria-label="Close">&times;</button>
+                </div>
+                <form id="pp-cl-preset-modal-form" class="pp-modal-body">
+                    <label class="pp-field">
+                        <span class="pp-field-label">Standard color name <span class="pp-field-req">*</span></span>
+                        <input type="text" id="pp-cl-preset-modal-name" required autocomplete="off" />
+                    </label>
+                    <div id="pp-cl-preset-modal-hint" class="pp-modal-hint" hidden></div>
+                    <div class="pp-modal-actions">
+                        <button type="button" class="pp-secondary-btn" id="pp-cl-preset-modal-cancel">Cancel</button>
+                        <button type="submit" class="pp-primary-btn" id="pp-cl-preset-modal-submit" disabled>Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Delete Project Modal -->
+        <div id="pp-delete-modal" class="pp-modal-backdrop" hidden>
+            <div class="pp-modal" role="dialog" aria-modal="true" aria-labelledby="pp-delete-modal-title">
+                <div class="pp-modal-header pp-modal-header-danger">
+                    <h2 id="pp-delete-modal-title">Delete Project</h2>
+                    <button type="button" class="pp-modal-close" id="pp-delete-modal-close" aria-label="Close">&times;</button>
+                </div>
+                <form id="pp-delete-modal-form" class="pp-modal-body">
+                    <p class="pp-modal-warn">
+                        This will permanently delete project
+                        <strong id="pp-delete-modal-target"></strong>
+                        and all its castings, optimizer hours, tracking, color logs, and batch tickets.
+                        <br>
+                        <strong>This cannot be undone.</strong>
+                    </p>
+                    <label class="pp-field">
+                        <span class="pp-field-label">Type <code id="pp-delete-modal-confirm-target"></code> to confirm</span>
+                        <input type="text" id="pp-delete-modal-input" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                    </label>
+                    <div class="pp-modal-actions">
+                        <button type="button" class="pp-secondary-btn" id="pp-delete-modal-cancel">Cancel</button>
+                        <button type="submit" class="pp-danger-btn" id="pp-delete-modal-confirm" disabled>Delete project</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Add Remake Casting Modal -->
+        <div id="pp-remake-modal" class="pp-modal-backdrop" hidden>
+            <div class="pp-modal" role="dialog" aria-modal="true" aria-labelledby="pp-remake-modal-title">
+                <div class="pp-modal-header">
+                    <h2 id="pp-remake-modal-title">Add Remake Casting</h2>
+                    <button type="button" class="pp-modal-close" id="pp-remake-modal-close" aria-label="Close">&times;</button>
+                </div>
+                <form id="pp-remake-modal-form" class="pp-modal-body">
+                    <p class="pp-modal-hint">
+                        Pick which castings to pull rejected panels from. A new
+                        casting will be created with one inventory line per panel
+                        type, summing rejected quantities. The new panels will
+                        get fresh panel IDs; the original rejected panels stay
+                        rejected on their source casting.
+                    </p>
+                    <div id="pp-remake-modal-list" class="pp-remake-list"></div>
+                    <div id="pp-remake-modal-empty" class="pp-modal-hint" hidden>
+                        No rejected panels found on this project.
+                    </div>
+                    <div class="pp-modal-actions">
+                        <button type="button" class="pp-secondary-btn" id="pp-remake-modal-cancel">Cancel</button>
+                        <button type="submit" class="pp-primary-btn" id="pp-remake-modal-submit" disabled>Create remake casting</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Import Remakes Modal -->
+        <div class="pp-modal-backdrop" id="pp-import-remakes-modal" role="dialog" aria-modal="true" aria-labelledby="pp-import-remakes-title" hidden>
+            <div class="pp-modal">
+                <div class="pp-modal-header">
+                    <h2 id="pp-import-remakes-title">Import Remakes</h2>
+                    <button type="button" class="pp-modal-close" id="pp-import-remakes-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="pp-modal-body">
+                    <p class="pp-modal-hint" id="pp-import-remakes-intro">Select rejected panels to bring into this casting as remakes.</p>
+                    <div class="pp-import-remakes-list" id="pp-import-remakes-list"></div>
+                </div>
+                <div class="pp-modal-actions">
+                    <button type="button" class="pp-secondary-btn" id="pp-import-remakes-cancel">Cancel</button>
+                    <button type="button" class="pp-primary-btn" id="pp-import-remakes-submit" disabled>Import Selected</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Print Folder Labels Modal -->
+        <div class="pp-modal-backdrop" id="pp-print-label-modal" role="dialog" aria-modal="true" aria-labelledby="pp-print-label-title" hidden>
+            <div class="pp-modal">
+                <div class="pp-modal-header">
+                    <h2 id="pp-print-label-title">Print Folder Labels</h2>
+                    <button type="button" class="pp-modal-close" id="pp-print-label-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="pp-modal-body">
+                    <p class="pp-modal-hint">Pick the castings to print a folder label for. Each label shows the project name and casting&nbsp;# on top, with the color log below.</p>
+                    <label class="pp-print-label-all"><input type="checkbox" id="pp-print-label-all"> Select all</label>
+                    <div class="pp-print-label-list" id="pp-print-label-list"></div>
+                </div>
+                <div class="pp-modal-actions">
+                    <button type="button" class="pp-secondary-btn" id="pp-print-label-cancel">Cancel</button>
+                    <button type="button" class="pp-primary-btn" id="pp-print-label-submit" disabled>Print Selected</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pick castings (folder cover / color log prints) -->
+        <div class="pp-modal-backdrop" id="pp-cast-pick-modal" role="dialog" aria-modal="true" aria-labelledby="pp-cast-pick-title" hidden>
+            <div class="pp-modal">
+                <div class="pp-modal-header">
+                    <h2 id="pp-cast-pick-title">Pick castings</h2>
+                    <button type="button" class="pp-modal-close" id="pp-cast-pick-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="pp-modal-body">
+                    <p class="pp-modal-hint" id="pp-cast-pick-hint"></p>
+                    <label class="pp-print-label-all"><input type="checkbox" id="pp-cast-pick-all"> Select all</label>
+                    <div class="pp-print-label-list" id="pp-cast-pick-list"></div>
+                </div>
+                <div class="pp-modal-actions">
+                    <button type="button" class="pp-secondary-btn" id="pp-cast-pick-cancel">Cancel</button>
+                    <button type="button" class="pp-primary-btn" id="pp-cast-pick-submit" disabled>Print</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Print Tracking Modal -->
+        <div id="pp-track-print-modal" class="pp-modal-backdrop" hidden>
+            <div class="pp-modal" role="dialog" aria-modal="true" aria-labelledby="pp-track-print-modal-title">
+                <div class="pp-modal-header">
+                    <h2 id="pp-track-print-modal-title">Print Tracking</h2>
+                    <button type="button" class="pp-modal-close" id="pp-track-print-modal-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="pp-modal-body">
+                    <p class="pp-modal-hint">Select a casting to print its tracking sheet.</p>
+                    <div id="pp-track-print-modal-list" class="pp-track-print-list"></div>
+                    <div class="pp-modal-actions">
+                        <button type="button" class="pp-secondary-btn" id="pp-track-print-modal-cancel">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Print Optimizer Modal -->
+        <div id="pp-opt-print-modal" class="pp-modal-backdrop" hidden>
+            <div class="pp-modal" role="dialog" aria-modal="true" aria-labelledby="pp-opt-print-modal-title">
+                <div class="pp-modal-header">
+                    <h2 id="pp-opt-print-modal-title">Print Optimizer Hours</h2>
+                    <button type="button" class="pp-modal-close" id="pp-opt-print-modal-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="pp-modal-body">
+                    <p class="pp-modal-hint">Select which castings to print. One casting per letter-sized page.</p>
+                    <div class="pp-opt-print-toolbar">
+                        <button type="button" class="pp-link-btn" id="pp-opt-print-select-all">Select all</button>
+                        <span class="pp-opt-print-toolbar-sep">·</span>
+                        <button type="button" class="pp-link-btn" id="pp-opt-print-select-none">Select none</button>
+                    </div>
+                    <div id="pp-opt-print-modal-list" class="pp-opt-print-list"></div>
+                    <div class="pp-modal-actions">
+                        <button type="button" class="pp-secondary-btn" id="pp-opt-print-modal-cancel">Cancel</button>
+                        <button type="button" class="pp-primary-btn" id="pp-opt-print-modal-print">Print</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast -->
+        <div id="pp-toast" class="pp-toast" hidden></div>
+    </div>
+
+    <script type="module" src="src/pages/project-portal/project-portal-page.js?v=20261019-3"></script>
+</body>
+</html>

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  var realFetch = window.fetch.bind(window);
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+  });
+})();
+</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Releasability Board - Weekly Schedule</title>
+
+    <!-- Favicon (inline SVG) -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E📊%3C/text%3E%3C/svg%3E">
+
+    <!-- Base Stylesheets -->
+    <link rel="stylesheet" href="src/styles/variables.css">
+    <link rel="stylesheet" href="src/styles/base.css">
+    <link rel="stylesheet" href="src/styles/buttons.css">
+
+    <!-- Releasability-Specific Stylesheet (includes all needed styles) -->
+    <link rel="stylesheet" href="src/styles/releasability.css?v=20261016-1">
+</head>
+<body>
+    <div id="releasability-app">
+        <!-- Status Legend -->
+        <div class="status-legend">
+            <div class="legend-left">
+                <div class="search-bar-wrapper">
+                    <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input type="text" id="project-search" placeholder="Search projects..." autocomplete="off" />
+                    <button id="search-clear-btn" class="search-clear-btn" aria-label="Clear search" style="display:none;">&times;</button>
+                </div>
+                <span class="legend-title">Status:</span>
+                <div class="legend-item">
+                    <span class="status-indicator status-complete"></span>
+                    <span class="legend-label">Complete</span>
+                </div>
+                <div class="legend-item">
+                    <span class="status-indicator status-in-progress"></span>
+                    <span class="legend-label">In Progress</span>
+                </div>
+                <div class="legend-item">
+                    <span class="status-indicator status-incomplete"></span>
+                    <span class="legend-label">Incomplete</span>
+                </div>
+                <div class="legend-item">
+                    <span class="status-indicator status-not-applicable"></span>
+                    <span class="legend-label">Not Applicable</span>
+                </div>
+            </div>
+            <div class="legend-right">
+                <a href="index.html" id="weekly-view-btn" class="nav-link-btn" aria-label="Weekly Schedule" title="Weekly Schedule">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                        <line x1="16" y1="2" x2="16" y2="6"/>
+                        <line x1="8" y1="2" x2="8" y2="6"/>
+                        <line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                    <span>Schedule</span>
+                </a>
+                <a href="project-portal.html" id="project-portal-btn" class="nav-link-btn" aria-label="Project Portal" title="Project Portal" style="margin-right: 10px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <span>Portal</span>
+                </a>
+                <label class="hide-completed-label">
+                    <input type="checkbox" id="hide-completed-toggle" />
+                    Hide Completed Projects
+                </label>
+                <button id="add-week-btn" class="add-week-btn">+ Add Week</button>
+                <button id="print-btn" class="icon-btn" aria-label="Print Report" style="margin-left: 10px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 6 2 18 2 18 9"/>
+                        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+                        <rect x="6" y="14" width="12" height="8"/>
+                    </svg>
+                </button>
+                <span id="data-freshness" class="data-freshness" aria-live="polite">Updating…</span>
+                <button id="refresh-btn" class="icon-btn" aria-label="Refresh Data" style="margin-left: 10px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                    </svg>
+                </button>
+                <button id="fullscreen-btn" class="icon-btn" aria-label="Toggle Fullscreen" style="margin-left: 10px;">
+                    <svg id="fullscreen-icon-expand" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+                    </svg>
+                    <svg id="fullscreen-icon-compress" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                        <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 0 2-2h3M3 16h3a2 2 0 0 0 2-2v-3"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Main Grid Container -->
+        <div class="grid-wrapper">
+            <div id="releasability-grid-container" class="grid-container">
+                <!-- Grid will be dynamically rendered here -->
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <p>Loading releasability data...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Add Manual Casting (enter Project # + Cast #; name auto-resolves from the portal) -->
+    <div id="add-casting-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add Manual Casting</h2>
+                <button type="button" class="modal-close" id="add-casting-close-btn" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="add-casting-form">
+                    <div class="form-group">
+                        <label for="casting-project-number">Project # <span class="required">*</span></label>
+                        <input type="text" id="casting-project-number" name="casting-project-number" required placeholder="e.g. 0383" autocomplete="off">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="casting-cast-number">Cast # <span class="required">*</span></label>
+                        <input type="text" id="casting-cast-number" name="casting-cast-number" required placeholder="e.g. 13, 1A" autocomplete="off">
+                    </div>
+
+                    <!-- Revealed only when the entered project has phases enabled -->
+                    <div class="form-group" id="casting-phase-group" style="display: none;">
+                        <label for="casting-phase">Phase <span class="required">*</span></label>
+                        <select id="casting-phase" name="casting-phase"></select>
+                        <small class="form-help">This project uses phases, so cast numbers can repeat per phase — pick which phase this casting belongs to.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Project Name (from portal)</label>
+                        <div id="casting-resolved-name" class="resolved-name is-empty">Enter a Project # to look up the name…</div>
+                        <small class="form-help">When this casting later arrives from the schedule with the same Project # and Cast #, its tracking will already be here and merge in automatically.</small>
+                    </div>
+
+                    <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
+                        <button type="button" class="action-button" id="add-casting-cancel-btn">Cancel</button>
+                        <button type="submit" class="action-button primary">Add Casting</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Application Script -->
+    <script type="module" src="src/pages/releasability/releasability-page.js?v=20261019-1"></script>
+</body>
+</html>

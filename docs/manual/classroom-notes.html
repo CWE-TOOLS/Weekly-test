@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  var realFetch = window.fetch.bind(window);
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+  });
+})();
+</script>
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Classroom (CR) Notes — Project Portal Manual</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E📘%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/manual.css">
+</head>
+<body data-page="classroom-notes">
+<div class="m-shell">
+  <main class="m-main">
+    <div class="m-content">
+      <div class="m-breadcrumb"><a href="index.html">Manual</a> &rsaquo; Project Tabs &rsaquo; Classroom (CR) Notes</div>
+      <h1>Classroom (CR) Notes</h1>
+      <p class="m-lede">A running record of the three project &ldquo;classroom&rdquo; meetings — kickoff, mid-project, and pre-production. Each classroom comes with a standard agenda checklist, a place to capture notes, and a task list, so the same review happens on every job.</p>
+
+      <div class="callout note">
+        <span class="callout-title">Where it lives</span>
+        <p>The <span class="ui">CR Notes</span> tab in a project's sidebar. The heading on the tab reads <strong>Classroom Notes</strong>.</p>
+      </div>
+
+      <h2>What &ldquo;classrooms&rdquo; are</h2>
+      <p>A classroom is a structured project meeting. Every project goes through three of them, each with its own built-in agenda:</p>
+      <div class="m-deflist">
+        <div class="row"><div class="term">Classroom 1</div><div class="desc">Standard <strong>kickoff</strong> checklist — review drawings, classify the project, discuss the sample/mix/finishing notes, confirm castings and layout needs, walk through Optimizer hours, break the job into phases, and more.</div></div>
+        <div class="row"><div class="term">Classroom 2</div><div class="desc">Standard <strong>mid-project</strong> checklist — review shop and 3D drawings, material usage and specialty POs, phased tickets, the sample color/finish in depth, the draft tracking sheet, casting layout, and the batching tickets.</div></div>
+        <div class="row"><div class="term">Classroom 3</div><div class="desc">Standard <strong>pre-production</strong> checklist — confirm the shop folder is complete, final drawings and parts lists, casting layout done, all batching tickets accurate, final QA matches tracking, Optimizer hours finalized, and crate sizes/quantities confirmed.</div></div>
+      </div>
+
+      <h2>Using the tab</h2>
+      <ol class="steps">
+        <li><strong>Pick a classroom.</strong> Use the three sub-tabs at the top (<span class="ui">Classroom 1 / 2 / 3</span>) to switch between meetings. Only one is shown at a time.</li>
+        <li><strong>Work the agenda.</strong> Each classroom shows its numbered agenda — use it as a live checklist during the meeting so nothing gets skipped. Some agenda items are tagged (for example, &ldquo;Review in Classroom 2&rdquo; or &ldquo;Homework&rdquo;) to flag when they're really handled.</li>
+        <li><strong>Capture tasks.</strong> Under <span class="ui">Tasks</span>, click <span class="ui">+ Add Task</span> to log action items that come out of the meeting for that classroom.</li>
+        <li><strong>Take notes.</strong> Type meeting notes into the notes box for that classroom. Each classroom keeps its own separate notes.</li>
+      </ol>
+
+      <h2>General Notes</h2>
+      <p>Below the classroom panels is a <strong>General Notes</strong> card. Unlike the per-classroom notes, this one is <strong>shared across all three classrooms</strong> — use it for project-level notes that apply no matter which meeting you're in.</p>
+
+      <div class="callout tip">
+        <span class="callout-title">Why it matters for onboarding</span>
+        <p>The agendas are the same on every job, so a new estimator or PM can run a classroom meeting just by walking the checklist top to bottom. It's the fastest way to learn what &ldquo;a complete project&rdquo; looks like at CWE.</p>
+      </div>
+
+      <div class="callout warn">
+        <span class="callout-title">Save the project first</span>
+        <p>You need a saved project before you can add tasks. If you just created the project, fill in the Project Info and let it save, then come back.</p>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/manual-nav.js"></script>
+</body>
+</html>

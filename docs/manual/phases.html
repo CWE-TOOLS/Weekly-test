@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  var realFetch = window.fetch.bind(window);
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+  });
+})();
+</script>
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Phases — Project Portal Manual</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E📘%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/manual.css">
+</head>
+<body data-page="phases">
+<div class="m-shell">
+  <main class="m-main">
+    <div class="m-content">
+      <div class="m-breadcrumb"><a href="index.html">Manual</a> &rsaquo; Reference &rsaquo; Phases</div>
+      <h1>Phases</h1>
+      <p class="m-lede">A way to split a large job into smaller pieces — building wings, delivery waves, or any natural grouping — so several tabs get their own per-phase view instead of mixing everything together in one long list.</p>
+
+      <div class="callout danger">
+        <span class="callout-title">One-way switch — there's no going back</span>
+        <p>Once phases are enabled for a project, they <strong>cannot</strong> be turned back off. Only enable phases when the job is genuinely phased. If you're not sure, leave it off — a project runs perfectly well without phases.</p>
+      </div>
+
+      <h2>What this tab is for</h2>
+      <p>Most jobs are simple enough to handle as one big list of castings. But a large job — say a building with three wings, or a project that ships in waves — gets unwieldy when everything is piled together. Phases let you carve the job into named pieces. The tabs that deal with day-to-day production then show one phase at a time, so the screen only shows the castings you're working on right now.</p>
+
+      <h2>How to enable and use phases</h2>
+      <p>You turn phases on from the <span class="ui">Phases</span> section at the bottom of the <a href="project-info.html">Project Info</a> tab.</p>
+      <ol class="steps">
+        <li><strong>Open Project Info.</strong> Scroll to the <span class="ui">Phases</span> section at the bottom of the tab.</li>
+        <li><strong>Turn it on.</strong> Click <span class="ui">Enable Phases</span>. (Read the warning above first — this can't be undone.)</li>
+        <li><strong>Add your phases.</strong> Create a phase for each piece of the job and give it a clear name (for example &ldquo;Wing A&rdquo; or &ldquo;Delivery 1&rdquo;).</li>
+        <li><strong>Reorder and rename as needed.</strong> Drag phases into the order that makes sense, and rename them at any time.</li>
+        <li><strong>Switch between phases.</strong> On any phase-aware tab, use the phase tabs at the top of the section, or the phase switcher dropdown in the project header, to choose which phase you're looking at.</li>
+      </ol>
+
+      <div class="callout warn">
+        <span class="callout-title">Decide on phases early</span>
+        <p>Set up your phases <em>before</em> loading lots of castings — ideally right after kickoff. Each casting belongs to a phase, so deciding early means every casting lands in the right place from the start instead of being sorted out later.</p>
+      </div>
+
+      <h2>Which tabs are affected</h2>
+      <p>When phases are on, the production tabs gain per-phase views. Everything else stays project-wide — shared across all phases — so you only set it once for the whole job.</p>
+      <table class="m-table">
+        <thead><tr><th>Tab</th><th>With phases on</th></tr></thead>
+        <tbody>
+          <tr><td class="k"><a href="casting-inventory.html">Casting Inventory</a></td><td>Per-phase — each casting belongs to a phase.</td></tr>
+          <tr><td class="k"><a href="tracking.html">Tracking</a></td><td>Per-phase — track each phase's castings on their own sheet.</td></tr>
+          <tr><td class="k"><a href="shipping.html">Shipping</a></td><td>Per-phase — crate and ship one phase at a time.</td></tr>
+          <tr><td class="k"><a href="optimizer-hours.html">Optimizer Hours</a></td><td>Per-phase — estimate labor separately per phase.</td></tr>
+          <tr><td class="k"><a href="batch-tickets.html">Batch Tickets</a></td><td>Per-phase — generate tickets for the active phase.</td></tr>
+          <tr><td class="k"><a href="color-log.html">Color Log</a></td><td>Project-wide — one mix recipe for the whole job.</td></tr>
+          <tr><td class="k"><a href="project-info.html">Project Info</a> (cover sheet)</td><td>Project-wide — one cover sheet for the whole job.</td></tr>
+          <tr><td class="k">Project <a href="statuses.html">Status</a></td><td>Project-wide — one status for the whole job.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Choosing which phases to track</h2>
+      <p>On the <a href="tracking.html">Tracking</a> tab, a <span class="ui">Track phases</span> chip bar lets you pick which phases show up on the tracking sheet. Turn off the phases you're not working on right now to keep the sheet focused on the castings actually moving through the shop.</p>
+
+      <div class="callout note">
+        <span class="callout-title">Where the switch lives</span>
+        <p>Phases are turned on from <a href="project-info.html">Project Info</a>, at the bottom of the tab. Once enabled, the phase switcher appears in the project header so you can change the active phase from anywhere in the job.</p>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/manual-nav.js"></script>
+</body>
+</html>
