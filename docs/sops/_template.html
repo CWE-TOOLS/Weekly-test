@@ -33,7 +33,8 @@
     method = (method || 'GET').toUpperCase();
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
     if (/\/rest\/v1\/project_crates/i.test(url)) return false;
-    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;
+    if (/\/rest\/v1\/task_descriptions/i.test(url) && /0860/.test(url + ' ' + String(body || '')) && /casting_number(=eq\.|":")Test/.test(url + ' ' + String(body || ''))) return false;   // Staging task/hours on job 0860 casting "Test" save for real   // the scheduler's own tables (preview) — nothing else reads them
     if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
     if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
     if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
@@ -62,7 +63,7 @@
     var bar = document.createElement('div');
     bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
       'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
-    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test" (inventory, batching, Staging tasks + hours): those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
       '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
     document.body.appendChild(bar);
   });
