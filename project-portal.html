@@ -65,7 +65,7 @@
     <link rel="stylesheet" href="src/styles/variables.css">
     <link rel="stylesheet" href="src/styles/base.css">
     <link rel="stylesheet" href="src/styles/buttons.css">
-    <link rel="stylesheet" href="src/styles/project-portal.css?v=20261022-1">
+    <link rel="stylesheet" href="src/styles/project-portal.css?v=20261022-2">
 
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 </head>
@@ -172,7 +172,10 @@
         <!-- FORM VIEW -->
         <section id="pp-form-view" class="pp-view" hidden>
             <div class="pp-form-controls">
-                <button id="pp-back-list-btn" class="pp-link-btn">&larr; Back to list</button>
+                <div class="pp-form-nav">
+                    <button id="pp-back-list-btn" class="pp-link-btn">&larr; Back to list</button>
+                    <a href="scheduler.html" class="pp-link-btn pp-sched-return" title="Return to the Plant Scheduler">&larr; Plant Scheduler</a>
+                </div>
                 <div class="pp-form-context">
                     <span id="pp-form-context-num"></span>
                     <span id="pp-form-context-name"></span>
