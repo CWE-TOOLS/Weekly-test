@@ -81,7 +81,7 @@ import {
     updateInventoryItem,
     deleteInventoryItem,
     setInventoryOrder
-} from '../../services/inventory-service.js';
+} from '../../services/inventory-service.js?v=20261020-2';
 import {
     loadColorLogForProject,
     loadColorLogsForProject,
@@ -108,7 +108,7 @@ import {
     roundSig,
     FROM_LBS
 } from '../../utils/batch-calc.js';
-import { getSpecialBatching } from '../../config/special-batching.js';
+import { getSpecialBatching } from '../../config/special-batching.js?v=20261020-3';
 import { fetchAllTasks } from '../../services/data-service.js';
 import { loadActualHoursForProject } from '../../services/actual-hours-service.js';
 import { parseDate } from '../../utils/date-utils.js';
@@ -128,7 +128,7 @@ import {
 import { renderCastingLayout } from './casting-layout.js?v=20260701-01';
 import { attachLayoutDrag } from './casting-layout-drag.js?v=20260701-01';
 import { activateJigListTab } from './jig-list.js?v=20261014-6';
-import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js';
+import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js?v=20261020-2';
 import { loadReadyFlags, setReadyFlag } from '../../services/schedule-service.js?v=20261021-1';
 import { loadMilestonesForProject, saveMilestone, isMilestonesMigrationPending, loadLayoutConditions, LAYOUT_CONDITION_PREFIX } from '../../services/milestones-service.js';
 import {
@@ -460,7 +460,8 @@ let currentOptDescExpanded = new Set();    // phaseIds whose description editor 
 // Pre-fills every casting column with the standard production departments so task
 // descriptions can be authored before the Google Sheet schedules them. Names come
 // from DEPARTMENT_ORDER so they match the weekly board's plain department names.
-const STG_DEPARTMENT_SEQUENCE = ['Mill', 'Form Out', 'Cast', 'Demold', 'Finish', 'Seal'];
+const STG_DEPARTMENT_SEQUENCE = ['CNC', 'Parts', 'Form Out', 'Cast', 'Demold', 'Finish', 'Seal'];          // from Nov 2026 the Optimizer has CNC + Parts instead of Mill
+const STG_DEPARTMENT_SEQUENCE_MILL = ['Mill', 'Form Out', 'Cast', 'Demold', 'Finish', 'Seal'];            // castings scheduled or noted under Mill keep their Mill column
 let currentStagingCastingId = null;          // active casting column in the Staging tab
 let currentStagingDescriptions = new Map();  // `${castingNumber}|${dept}|${day}` -> {description, castingSide}
 let currentStagingScaffold = new Map();      // castingNumber -> Array<{ department, days:number }>
@@ -1355,7 +1356,7 @@ function renderCastings() {
     list.hidden = false;
     empty.hidden = true;
     list.innerHTML = visible.map(c => renderCastingCard(c)).join('');
-    // Final & locked inventories (engineering done) are read-only until unlocked in the Releasability box.
+    // Ready (final) inventories are read-only until "Make changes" is pressed on the casting.
     list.querySelectorAll('.pp-cast-card').forEach(card => {
         if (!ciLockedById(card.dataset.castingId)) return;
         card.classList.add('pp-cast-card-locked');
@@ -1417,9 +1418,7 @@ function renderCastingCard(c) {
 function ciCardRowHtml(c) {
     const s = ciStatus(c.id), st = CI_STATE[s], r = msRow(c.id, 'Casting Inventory');
     const since = msWhen(r);
-    const action = st.next
-        ? `<button type="button" class="pp-ms-btn pp-ms-btn-${s}" data-action="ms-ci-advance">${escapeHtml(st.next)}</button>`
-        : `<button type="button" class="pp-ms-btn pp-ms-btn-unlock" data-action="ms-ci-unlock" title="Unlock to make changes — anything printed from this inventory turns orange on the board once it changes">&#128274; Locked &middot; click to unlock</button>`;
+    const action = ciActionsHtml(c.id, 'data-action');
     return `<div class="pp-cast-card-ms pp-ms-ci-${s}">
         ${msDot(s)}<span class="pp-cast-card-ms-state">${escapeHtml(st.label)}</span>
         ${msNote(r) ? `<span class="pp-cast-card-ms-note">${escapeHtml(msNote(r))}${since ? ' · ' + escapeHtml(since) : ''}</span>` : ''}
@@ -1433,19 +1432,20 @@ function renderInventoryBody(casting, items) {
         : items.map(item => renderInventoryRow(item, casting.id)).join('');
 
     const headerRow = `
+        <div class="pp-inv-legend"><span class="pp-inv-legend-pm" title="Qty, Extras, Type, Width, Length, Color, Remake Of — the PM enters these, then presses Ready for engineering">PM fields</span><span class="pp-inv-legend-eng" title="Cu Ft, FF Sq Ft — engineering enters these, then presses Casting Inventory ready">Engineering fields</span></div>
         <div class="pp-inv-header-row">
             <input type="checkbox" class="pp-inv-row-select pp-inv-select-all" data-select-all aria-label="Select every component on this casting" title="Select all / none" ${items.length && items.every(it => invSelected.has(it.id)) ? 'checked' : ''} ${items.length ? '' : 'disabled'}>
             <div class="pp-inv-header-grip-spacer"></div>
             <div class="pp-inv-header-fields">
-                <span class="pp-inv-header-qty">Qty</span>
-                <span class="pp-inv-header-qty">Extras</span>
-                <span>Type</span>
-                <span>Width</span>
-                <span>Length</span>
-                <span>Color</span>
-                <span class="pp-inv-header-num">Cu Ft</span>
-                <span class="pp-inv-header-num">FF Sq Ft</span>
-                <span>Remake Of</span>
+                <span class="pp-inv-header-qty pp-inv-h-pm">Qty</span>
+                <span class="pp-inv-header-qty pp-inv-h-pm">Extras</span>
+                <span class="pp-inv-h-pm">Type</span>
+                <span class="pp-inv-h-pm">Width</span>
+                <span class="pp-inv-h-pm">Length</span>
+                <span class="pp-inv-h-pm">Color</span>
+                <span class="pp-inv-header-num pp-inv-h-eng">Cu Ft</span>
+                <span class="pp-inv-header-num pp-inv-h-eng">FF Sq Ft</span>
+                <span class="pp-inv-h-pm">Remake Of</span>
             </div>
             <div class="pp-inv-header-copy-spacer"></div>
             <div class="pp-inv-header-cut-spacer"></div>
@@ -1503,18 +1503,20 @@ function countImportableRemakes(castingId) {
     return count;
 }
 
+/** The rejected panels a remake inventory row re-casts (kept on the row as a comma list, one id per piece). */
+function invRemakeIds(item) { return String(item?.remake_of_panel_id || '').split(',').map(x => x.trim()).filter(Boolean); }
 function renderInventoryRow(item, castingId) {
+    const remakeIds = item.remake_of_casting_id ? invRemakeIds(item) : [];
     let remakeCellHtml;
-    if (!item.remake_of_panel_id || !item.remake_of_casting_id) {
-        remakeCellHtml = `<span class="pp-inv-input pp-inv-remake-cell" aria-label="Remake of"></span>`;
+    if (!remakeIds.length) {
+        remakeCellHtml = `<span class="pp-inv-input pp-inv-pm pp-inv-remake-cell" aria-label="Remake of"></span>`;
     } else {
         const srcCasting = currentCastings.find(c => c.id === item.remake_of_casting_id);
         const srcNum = srcCasting?.casting_number || '?';
-        const srcLabel = `${srcNum}:${item.remake_of_panel_id}`;
-        remakeCellHtml = `<span class="pp-inv-input pp-inv-remake-cell" title="Remake of panel ${escapeAttr(item.remake_of_panel_id)} from casting ${escapeAttr(srcNum)}">${escapeHtml(srcLabel)}</span>`;
+        remakeCellHtml = `<span class="pp-inv-input pp-inv-pm pp-inv-remake-cell" title="Re-cast of ${remakeIds.length} rejected panel${remakeIds.length === 1 ? '' : 's'} from cast ${escapeAttr(srcNum)}: ${escapeAttr(remakeIds.join(', '))}">Cast ${escapeHtml(srcNum)}</span>`;
     }
     return `
-        <div class="pp-inv-row${invSelected.has(item.id) ? ' pp-inv-row-selected' : ''}" data-inventory-id="${escapeAttr(item.id)}" data-casting-id="${escapeAttr(castingId)}">
+        <div class="pp-inv-row${remakeIds.length ? ' pp-inv-row-remake' : ''}${invSelected.has(item.id) ? ' pp-inv-row-selected' : ''}" data-inventory-id="${escapeAttr(item.id)}" data-casting-id="${escapeAttr(castingId)}">
             <input type="checkbox" class="pp-inv-row-select" data-select-row aria-label="Select component" title="Tick to copy or cut several components at once" ${invSelected.has(item.id) ? 'checked' : ''}>
             <div class="pp-inv-row-grip" aria-hidden="true" title="Drag to reorder">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1523,17 +1525,17 @@ function renderInventoryRow(item, castingId) {
                 </svg>
             </div>
             <div class="pp-inv-row-fields">
-                ${invCell(item.id, 'quantity', `<input type="number" class="pp-inv-input pp-inv-input-qty${invEditedCls(item.id, 'quantity')}" data-field="quantity" min="1" step="1" value="${escapeAttr(item.quantity ?? 1)}"${invEditedTitle(item.id, 'quantity')} />`)}
-                ${invCell(item.id, 'extras', `<input type="number" class="pp-inv-input pp-inv-input-qty${invEditedCls(item.id, 'extras')}" data-field="extras" min="0" step="1" placeholder="0" value="${escapeAttr(item.extras ?? 0)}"${invEditedTitle(item.id, 'extras')} />`)}
-                ${invCell(item.id, 'type', `<input type="text" class="pp-inv-input${invEditedCls(item.id, 'type')}" data-field="type" placeholder="Type" value="${escapeAttr(item.type || '')}"${invEditedTitle(item.id, 'type')} />`)}
-                ${invCell(item.id, 'width', `<input type="text" class="pp-inv-input${invEditedCls(item.id, 'width')}" data-field="width" placeholder="Width" value="${escapeAttr(item.width || '')}"${invEditedTitle(item.id, 'width')} />`)}
-                ${invCell(item.id, 'length', `<input type="text" class="pp-inv-input${invEditedCls(item.id, 'length')}" data-field="length" placeholder="Length" value="${escapeAttr(item.length || '')}"${invEditedTitle(item.id, 'length')} />`)}
+                ${invCell(item.id, 'quantity', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'quantity')}" data-field="quantity" min="1" step="1" value="${escapeAttr(item.quantity ?? 1)}"${invEditedTitle(item.id, 'quantity')} />`)}
+                ${invCell(item.id, 'extras', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'extras')}" data-field="extras" min="0" step="1" placeholder="0" value="${escapeAttr(item.extras ?? 0)}"${invEditedTitle(item.id, 'extras')} />`)}
+                ${invCell(item.id, 'type', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}" data-field="type" placeholder="Type" value="${escapeAttr(item.type || '')}"${invEditedTitle(item.id, 'type')} />`)}
+                ${invCell(item.id, 'width', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'width')}" data-field="width" placeholder="Width" value="${escapeAttr(item.width || '')}"${invEditedTitle(item.id, 'width')} />`)}
+                ${invCell(item.id, 'length', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'length')}" data-field="length" placeholder="Length" value="${escapeAttr(item.length || '')}"${invEditedTitle(item.id, 'length')} />`)}
                 ${invCell(item.id, 'color_log_id', buildColorLogSelectHtml(item.color_log_id, {
-                    className: 'pp-inv-input pp-inv-color-select' + invEditedCls(item.id, 'color_log_id'),
+                    className: 'pp-inv-input pp-inv-pm pp-inv-color-select' + invEditedCls(item.id, 'color_log_id'),
                     dataAttrs: { 'data-field': 'color_log_id' }
                 }))}
-                ${invCell(item.id, 'cu_ft', `<input type="number" class="pp-inv-input pp-inv-input-num${invEditedCls(item.id, 'cu_ft')}" data-field="cu_ft" step="any" min="0" placeholder="0" value="${item.cu_ft == null ? '' : escapeAttr(item.cu_ft)}"${invEditedTitle(item.id, 'cu_ft')} />`)}
-                ${invCell(item.id, 'ff_sq_ft', `<input type="number" class="pp-inv-input pp-inv-input-num${invEditedCls(item.id, 'ff_sq_ft')}" data-field="ff_sq_ft" step="any" min="0" placeholder="0" value="${item.ff_sq_ft == null ? '' : escapeAttr(item.ff_sq_ft)}"${invEditedTitle(item.id, 'ff_sq_ft')} />`)}
+                ${invCell(item.id, 'cu_ft', `<input type="number" class="pp-inv-input pp-inv-eng pp-inv-input-num${invEditedCls(item.id, 'cu_ft')}" data-field="cu_ft" step="any" min="0" placeholder="0" value="${item.cu_ft == null ? '' : escapeAttr(item.cu_ft)}"${invEditedTitle(item.id, 'cu_ft')} />`)}
+                ${invCell(item.id, 'ff_sq_ft', `<input type="number" class="pp-inv-input pp-inv-eng pp-inv-input-num${invEditedCls(item.id, 'ff_sq_ft')}" data-field="ff_sq_ft" step="any" min="0" placeholder="0" value="${item.ff_sq_ft == null ? '' : escapeAttr(item.ff_sq_ft)}"${invEditedTitle(item.id, 'ff_sq_ft')} />`)}
                 ${remakeCellHtml}
             </div>
             <button class="pp-inv-row-copy" type="button" data-action="copy-inventory-row" aria-label="Copy component" title="Copy this component — paste it with another casting's Paste button">Copy</button>
@@ -1965,6 +1967,7 @@ async function handleCreateRemakeSubmit() {
             }
         }
 
+        if (lines.length) ciEntered(created.id);
         closeRemakeModal();
         // Re-sync tracking from inventory so the new panel_ids materialize,
         // then re-render the Castings tab.
@@ -2023,7 +2026,7 @@ function openImportRemakesModal(castingId) {
 
     intro.textContent = candidates.length === 0
         ? `No rejected panels are currently targeting ${target.casting_number || 'this casting'} for remake.`
-        : `Select panels to import into ${target.casting_number || 'this casting'} as remakes. Each becomes a new inventory line.`;
+        : `Select panels to import into ${target.casting_number || 'this casting'} as remakes. Panels of the same type and size become one inventory line (its quantity counts them).`;
 
     if (candidates.length === 0) {
         list.innerHTML = `<div class="pp-import-remakes-empty">Nothing to import.</div>`;
@@ -2141,26 +2144,48 @@ async function handleImportRemakesConfirm() {
     const submit = document.getElementById('pp-import-remakes-submit');
     if (submit) submit.disabled = true;
 
+    // One inventory row per source cast + type + size + colour (2026-10-20): the quantity counts the panels, Cu Ft /
+    // FF Sq Ft come from the source cast's inventory row for that type, and the panel ids stay on the row (comma
+    // list) so every rebuilt component still points back at its own rejected panel. Panels of a kind already
+    // imported here from the same cast join that row.
+    const same = (a, b) => (a || null) === (b || null);
+    const groups = new Map();
+    for (const src of sources) {
+        const key = [src.casting_id, src.type, src.width, src.length, src.color_log_id, src.color, src.sealer].map(v => v ?? '').join('|');
+        if (!groups.has(key)) groups.set(key, { src, ids: [] });
+        if (src.panel_id) groups.get(key).ids.push(src.panel_id);
+    }
     let okCount = 0;
     let failCount = 0;
-    for (const src of sources) {
+    for (const { src, ids } of groups.values()) {
+        const n = Math.max(1, ids.length);
         try {
-            await createInventoryItem(targetCastingId, {
-                type: src.type || null,
-                width: src.width || null,
-                length: src.length || null,
-                color: src.color || null,
-                color_log_id: src.color_log_id || null,
-                sealer: src.sealer || null,
-                quantity: 1,
-                extras: 0,
-                remake_of_panel_id: src.panel_id || null,
-                remake_of_casting_id: src.casting_id || null
-            });
-            okCount++;
+            const existing = getInventoryFor(targetCastingId).find(r => r.remake_of_casting_id === src.casting_id && same(r.type, src.type) && same(r.width, src.width) && same(r.length, src.length) && same(r.color_log_id, src.color_log_id));
+            if (existing) {
+                const merged = invRemakeIds(existing).concat(ids);
+                await updateInventoryItem(existing.id, { quantity: (parseInt(existing.quantity, 10) || 0) + n, remake_of_panel_id: merged.join(',') || null });
+            } else {
+                const srcRows = getInventoryFor(src.casting_id);
+                const srcInv = srcRows.find(r => same(r.type, src.type) && same(r.width, src.width) && same(r.length, src.length)) || srcRows.find(r => same(r.type, src.type)) || null;
+                await createInventoryItem(targetCastingId, {
+                    type: src.type || null,
+                    width: src.width || null,
+                    length: src.length || null,
+                    color: src.color || null,
+                    color_log_id: src.color_log_id || null,
+                    sealer: src.sealer || null,
+                    quantity: n,
+                    extras: 0,
+                    cu_ft: srcInv?.cu_ft ?? null,
+                    ff_sq_ft: srcInv?.ff_sq_ft ?? null,
+                    remake_of_panel_id: ids.join(',') || null,
+                    remake_of_casting_id: src.casting_id || null
+                });
+            }
+            okCount += n;
         } catch (err) {
             logger.error('[project-portal] import remake failed:', err);
-            failCount++;
+            failCount += n;
         }
     }
 
@@ -2175,6 +2200,7 @@ async function handleImportRemakesConfirm() {
             logger.error('[project-portal] post-import reload failed:', e);
         }
         renderCastings();
+        ciEntered(targetCastingId);
         await syncTrackingFromInventory();
         msInventoryChanged(targetCastingId);
         showToast(`Imported ${okCount} remake${okCount === 1 ? '' : 's'}${failCount ? ` (${failCount} failed)` : ''}.`, failCount ? 'warning' : 'success');
@@ -2276,6 +2302,7 @@ async function handleAddInventoryItem(castingId) {
         const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
         const last = card?.querySelector('.pp-inv-row:last-of-type input[data-field="type"]');
         last?.focus();
+        ciEntered(castingId);
         syncTrackingFromInventory();
         msInventoryChanged(castingId);
     } catch (err) {
@@ -2332,6 +2359,7 @@ async function saveInventoryItem(itemId, castingId) {
     }
     if (Object.keys(changed).length === 0) return;
     Object.assign(item, changed);          // the value changed in the user's hands
+    ciEntered(castingId);                  // first entry: the board's Casting Inventory cell goes orange by itself
     msInventoryChanged(castingId);         // linked prints go orange — or back to green when the inventory is back as printed
 
     try {
@@ -2903,15 +2931,18 @@ function buildStgScaffold() {
         const deptMax = seen.get(castNum) || new Map();
         const depts = [];
         const used = new Set();
-        for (const dept of STG_DEPARTMENT_SEQUENCE) {
+        const legacyMill = deptMax.has('Mill') && !deptMax.has('CNC') && !deptMax.has('Parts');
+        for (const dept of (legacyMill ? STG_DEPARTMENT_SEQUENCE_MILL : STG_DEPARTMENT_SEQUENCE)) {
             depts.push({ department: dept, days: Math.max(1, deptMax.get(dept) || 0) });
             used.add(dept);
         }
         const extras = [...deptMax.keys()].filter(d => !used.has(d));
-        extras.sort((a, b) => DEPARTMENT_ORDER.indexOf(a) - DEPARTMENT_ORDER.indexOf(b));
         for (const dept of extras) {
             depts.push({ department: dept, days: Math.max(1, deptMax.get(dept) || 1) });
         }
+        // Weekly order throughout (a casting with October Mill days and November Parts days reads CNC, Parts, Mill, Form Out…).
+        const orderIdx = (d) => { const i = DEPARTMENT_ORDER.indexOf(d); return i === -1 ? Number.MAX_SAFE_INTEGER : i; };
+        depts.sort((a, b) => orderIdx(a.department) - orderIdx(b.department));
         currentStagingScaffold.set(castNum, depts);
     }
 }
@@ -4104,6 +4135,7 @@ async function handlePasteComponents(targetCastingId) {
         const target = currentCastings.find(c => c.id === targetCastingId);
         const n = inserted.filter(Boolean).length;
         showToast(`Pasted ${n} component${n === 1 ? '' : 's'} into Cast ${target?.casting_number || ''}.`);
+        if (n) ciEntered(targetCastingId);
         syncTrackingFromInventory();
         msInventoryChanged(targetCastingId);
     } catch (err) {
@@ -4333,7 +4365,18 @@ function invFingerprint(castingId, milestone) {
     return invHash(rows.join('\n')) + '-' + rows.length;
 }
 /** All per-print fingerprints as one marker body: b=…;l=…;t=…;c=…;j=… */
-function invMarks(castingId) { return CI_DEPENDENT.map(m => INV_MARK_KEYS[m] + '=' + invFingerprint(castingId, m)).join(';'); }
+function invMarks(castingId) { return CI_DEPENDENT.map(m => INV_MARK_KEYS[m] + '=' + invFingerprint(castingId, m)).join(';') + ';bc=' + invColourFingerprint(castingId); }
+/** The colour logs the inventory uses (rows with pieces), order ignored — stored as bc=… so a colour change is always a reprint. */
+function invColourFingerprint(castingId) {
+    const ids = [...new Set(getInventoryFor(castingId).filter(r => ((Number(r.quantity) || 0) + (Number(r.extras) || 0)) > 0).map(r => String(r.color_log_id || '')))].sort();
+    return invHash(ids.join('|')) + '-' + ids.length;
+}
+/** The colour fingerprint stored at the last "ready" ('' when that lock predates it). */
+function invBaselineColour(castingId) {
+    const m = String(msRow(castingId, 'Casting Inventory')?.note || '').match(INV_MARK_RE);
+    const part = m ? m[1].split(';').find(p => p.startsWith('bc=')) : null;
+    return part ? part.slice(3) : '';
+}
 /** Baselines stored at lock time: milestone -> hash (empty when the lock predates per-print marks). */
 function invBaselines(castingId) {
     const m = String(msRow(castingId, 'Casting Inventory')?.note || '').match(INV_MARK_RE);
@@ -4394,18 +4437,98 @@ function deriveStagingMilestones() {
 let msStagingDeriveTimer = null;
 function scheduleStagingDerive() { clearTimeout(msStagingDeriveTimer); msStagingDeriveTimer = setTimeout(deriveStagingMilestones, 700); }
 
-// ---- Casting Inventory lock: red (PM entering) -> orange (ready for engineering) -> green + locked (engineering done)
-async function ciAdvance(castingId) {
-    const s = ciStatus(castingId);
-    if (s === MS.RED) await msSet(castingId, 'Casting Inventory', MS.ORANGE, { note: 'Ready for engineering', stamp: true });
-    else if (s === MS.ORANGE) await msSet(castingId, 'Casting Inventory', MS.GREEN, { locked: true, note: withInvMark('Engineering done — final', invMarks(castingId)), stamp: true });
-    invEdits.clear();
+// ---- Casting Inventory box (2026-10-20): red = nothing entered, orange = in progress (from the first entry, by
+// itself), green + locked = engineering marked it ready. Two buttons: the PM's "Ready for engineering" only tells
+// engineering (the board does not change); engineering's "Casting Inventory ready" makes the inventory final and
+// read-only ("Make changes" undoes that, as the old unlock did).
+const CI_ENTERING_NOTE = 'Being entered';
+const CI_PM_NOTE = 'Ready for engineering';
+const CI_READY_NOTE = 'Casting Inventory ready — final';
+const CI_UNLOCKED_NOTE = 'Unlocked for changes — mark it ready again when done';
+/** The PM has pressed "Ready for engineering" (or engineering already marked the inventory ready). */
+function ciPmDone(castingId) { const r = msRow(castingId, 'Casting Inventory'); return !!r && (r.status === MS.GREEN || msNote(r).startsWith(CI_PM_NOTE)); }
+/** A new note for the Casting Inventory row that keeps the hidden print marker when there is one. */
+function ciNoteKeepMarks(castingId, note) { const m = invMarks0(castingId); return m ? withInvMark(note, m) : note; }
+/** The first entry on a casting's inventory: red becomes orange by itself (it never goes back to red by itself). */
+function ciEntered(castingId) { markWorking(castingId, 'Casting Inventory', CI_ENTERING_NOTE); }
+async function ciPmReady(castingId) {
+    if (ciStatus(castingId) === MS.GREEN) return;
+    await msSet(castingId, 'Casting Inventory', MS.ORANGE, { note: ciNoteKeepMarks(castingId, CI_PM_NOTE), stamp: true });
     renderCastings();
 }
-async function ciUnlock(castingId) {
-    // Keep the locked inventory's fingerprint (older locks have none: the inventory as it is now becomes the baseline).
-    await msSet(castingId, 'Casting Inventory', MS.ORANGE, { locked: false, note: withInvMark('Unlocked for changes — lock it again when done', Object.keys(invBaselines(castingId)).length ? invMarks0(castingId) : invMarks(castingId)), stamp: true });
+async function ciAdvance(castingId) {
+    if (ciStatus(castingId) !== MS.ORANGE) return;   // nothing entered yet, or already ready
+    const reprint = await ciBatchReprintCheck(castingId);   // against the as-printed marks, before the new ones replace them
+    await msSet(castingId, 'Casting Inventory', MS.GREEN, { locked: true, note: withInvMark(CI_READY_NOTE, invMarks(castingId)), stamp: true });
+    invEdits.clear();
+    ciBatchReprintReport(castingId, reprint);
     renderCastings();
+}
+/** Batch tickets printed from this inventory went orange because of the edits: do their numbers really change?
+ *  null = nothing to say (not printed, or orange for another reason); 'same' = the tickets come out the same and the
+ *  colours are as printed; 'changed' = print them again. Special batching pages (Jane Street) are not compared yet. */
+async function ciBatchReprintCheck(castingId) {
+    const r = msRow(castingId, 'Batching Sheets');
+    if (!r || r.status !== MS.ORANGE || r.note !== INV_CHANGED_NOTE) return null;
+    const bcBase = invBaselineColour(castingId);
+    if (!bcBase || bcBase !== invColourFingerprint(castingId)) return 'changed';   // colour changed, or an older lock with no colour record
+    if (getSpecialBatching(currentProjectNumber)) return specialReprintCheck(castingId);   // the Jane Street page compares its own tickets
+    try { await ensureBatchTicketsLoaded(); } catch { return 'changed'; }
+    return btReprintCheck(castingId) === 'same' ? 'same' : 'changed';
+}
+/** Special batching page (Jane Street): the embedded page compares its own tickets with the inventory as it is now.
+ *  The frame is loaded when the tab was never opened; no answer within 15 s counts as "changed". */
+let specialReprintSeq = 0;
+const specialReprintWaiting = new Map();   // token -> resolve
+function specialReprintCheck(castingId) {
+    const frame = getSpecialBatchingFrame();
+    if (!frame) return Promise.resolve('changed');
+    if (!frame.getAttribute('src')) renderSpecialBatching();
+    const token = 'rc' + (++specialReprintSeq);
+    return new Promise(resolve => {
+        const timer = setTimeout(() => { specialReprintWaiting.delete(token); resolve('changed'); }, 15000);
+        specialReprintWaiting.set(token, (v) => { clearTimeout(timer); specialReprintWaiting.delete(token); resolve(v === 'same' ? 'same' : 'changed'); });
+        const send = () => frame.contentWindow?.postMessage({ type: 'jsb-reprint-check', castingId, token }, location.origin);
+        send();
+        frame.addEventListener('load', send, { once: true });   // a page still loading has no listener yet: ask again once it is there
+    });
+}
+/** Special page: the "inventory is being updated" banner sits above the frame (the page itself knows nothing of milestones). */
+function updateSpecialUpdatingBanner() {
+    const wrap = document.getElementById('pp-bt-special');
+    if (!wrap) return;
+    let el = document.getElementById('pp-bt-special-updating');
+    if (!el) { el = document.createElement('div'); el.id = 'pp-bt-special-updating'; wrap.insertBefore(el, wrap.firstChild); }
+    const id = msBatchCastingId();
+    const casting = id ? currentCastings.find(c => c.id === id) : null;
+    el.innerHTML = casting ? renderBatchUpdatingBanner(casting) : '';
+}
+function ciBatchReprintReport(castingId, verdict) {
+    if (!verdict) return;
+    const name = msCastName(castingId);
+    if (verdict === 'same') {
+        msSet(castingId, 'Batching Sheets', MS.GREEN, { note: null });   // the print stamp stays: the printed tickets are still right
+        showToast(`${name}: the batch tickets come out the same — no need to print them again.`, 'success', 10000);
+    } else {
+        showToast(`${name}: the batch tickets change — print them again (Batching Sheets stays orange on the board until you do).`, 'warning', 10000);
+    }
+}
+async function ciUnlock(castingId) {
+    // Keep the ready inventory's fingerprint (older locks have none: the inventory as it is now becomes the baseline).
+    await msSet(castingId, 'Casting Inventory', MS.ORANGE, { locked: false, note: withInvMark(CI_UNLOCKED_NOTE, Object.keys(invBaselines(castingId)).length ? invMarks0(castingId) : invMarks(castingId)), stamp: true });
+    renderCastings();
+}
+/** The two buttons of the Casting Inventory box. attr: 'data-action' (casting card) or 'data-ms' (floating box). */
+function ciActionsHtml(castingId, attr) {
+    const s = ciStatus(castingId), ready = s === MS.GREEN, pmDone = ciPmDone(castingId);
+    const a = (name) => attr === 'data-action' ? `data-action="${name}"` : `data-${name}="${escapeAttr(castingId)}"`;
+    const pm = pmDone
+        ? `<button type="button" class="pp-ms-btn pp-ms-btn-done" disabled title="The PM's fields are done — engineering enters Cu Ft and FF Sq Ft">&#10003; Ready for engineering</button>`
+        : `<button type="button" class="pp-ms-btn pp-ms-btn-pm" ${a('ms-ci-pm')} title="PM: Qty, Extras, Type, Width, Length, Color and Remake Of are done — this only tells engineering (the board does not change)">Ready for engineering</button>`;
+    const eng = ready
+        ? `<button type="button" class="pp-ms-btn pp-ms-btn-done" disabled title="Engineering marked this inventory ready — it is final and read-only">&#10003; Casting Inventory ready</button><button type="button" class="pp-ms-btn pp-ms-btn-unlock" ${a('ms-ci-unlock')} title="Make changes — anything printed from this inventory turns orange on the board once it changes">Make changes</button>`
+        : `<button type="button" class="pp-ms-btn pp-ms-btn-eng" ${a('ms-ci-advance')}${s === MS.RED ? ' disabled' : ''} title="${s === MS.RED ? 'Nothing entered yet' : 'Engineering: Cu Ft and FF Sq Ft are done — the inventory becomes final and read-only (green on the board)'}">Casting Inventory ready</button>`;
+    return `<span class="pp-ms-ci-pm">${pm}</span><span class="pp-ms-ci-eng">${eng}</span>`;
 }
 
 // ---- Print gate: inventory-based printouts warn (and wait) while the inventory is not final.
@@ -4421,11 +4544,11 @@ async function printGate(castingIds, milestone) {
         el.className = 'pp-ms-gate';
         el.innerHTML = `<div class="pp-ms-gate-box" role="dialog" aria-modal="true">
             <div class="pp-ms-gate-title">&#9888; Casting Inventory is not final</div>
-            <div class="pp-ms-gate-text"><b>${escapeHtml(milestone)}</b> for cast${names.length === 1 ? '' : 's'} <b>${escapeHtml(names.join(', '))}</b> would be printed from an inventory engineering has not locked yet.
-                Finish the inventory first (Castings tab &rarr; "Engineering done"), then print.</div>
+            <div class="pp-ms-gate-text"><b>${escapeHtml(milestone)}</b> for cast${names.length === 1 ? '' : 's'} <b>${escapeHtml(names.join(', '))}</b> would be printed from an inventory engineering has not marked ready yet.
+                Finish the inventory first (Castings tab &rarr; "Casting Inventory ready"), then print.</div>
             <div class="pp-ms-gate-actions">
                 <button type="button" class="pp-ms-gate-cancel" data-ms-gate-cancel>Cancel</button>
-                <button type="button" class="pp-ms-gate-hold" data-ms-gate-hold title="Special cases only: hold for 10 seconds, then click to print anyway — the board shows it orange"><span class="pp-ms-gate-hold-bar"></span><span class="pp-ms-gate-hold-label">Hold 10 s to print anyway</span></button>
+                <button type="button" class="pp-ms-gate-hold" data-ms-gate-hold title="Special cases only: hold for 5 seconds, then click to print anyway — the board shows it orange"><span class="pp-ms-gate-hold-bar"></span><span class="pp-ms-gate-hold-label">Hold 5 s to print anyway</span></button>
             </div></div>`;
         document.body.appendChild(el);
         let armed = false, t0 = 0, raf = 0, timer = 0;
@@ -4437,19 +4560,21 @@ async function printGate(castingIds, milestone) {
         document.addEventListener('keydown', onKey);
         el.querySelector('[data-ms-gate-cancel]').addEventListener('click', () => done(false));
         el.addEventListener('click', (e) => { if (e.target === el) done(false); });
-        const reset = () => { if (armed) return; clearTimeout(timer); cancelAnimationFrame(raf); bar.style.width = '0%'; label.textContent = 'Hold 10 s to print anyway'; hold.classList.remove('pp-ms-gate-holding'); };
-        const tick = () => { const p = Math.min(1, (Date.now() - t0) / 10000); bar.style.width = (p * 100).toFixed(1) + '%'; label.textContent = `Keep holding… ${Math.ceil(10 - p * 10)} s`; raf = requestAnimationFrame(tick); };
+        const reset = () => { if (armed) return; clearTimeout(timer); cancelAnimationFrame(raf); bar.style.width = '0%'; label.textContent = 'Hold 5 s to print anyway'; hold.classList.remove('pp-ms-gate-holding'); };
+        const tick = () => { const p = Math.min(1, (Date.now() - t0) / 5000); bar.style.width = (p * 100).toFixed(1) + '%'; label.textContent = `Keep holding… ${Math.ceil(5 - p * 5)} s`; raf = requestAnimationFrame(tick); };
         hold.addEventListener('pointerdown', (e) => {
             if (armed) return;
             e.preventDefault();
             t0 = Date.now(); hold.classList.add('pp-ms-gate-holding'); tick();
-            timer = setTimeout(() => { cancelAnimationFrame(raf); armed = true; bar.style.width = '100%'; hold.classList.add('pp-ms-gate-armed'); label.textContent = 'Click to print anyway'; }, 10000);
+            timer = setTimeout(() => { cancelAnimationFrame(raf); armed = true; bar.style.width = '100%'; hold.classList.add('pp-ms-gate-armed'); label.textContent = 'Click to print anyway'; }, 5000);
         });
         for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) hold.addEventListener(ev, reset);
         hold.addEventListener('click', () => { if (armed) done(true); });   // a fresh click, so the print window is allowed to open
     });
 }
 window.__ppMilestones = { printGate, stampPrinted, markWorking, topOffset: msTopOffset, on: msOn, setJigCasting: (id) => { msJigCastingId = id; updateMsFloat(); } };
+// Read-only hooks for checking the batch-ticket comparison from the console (nothing here saves).
+window.__ppBatchCheck = { reprint: btReprintCheck, signature: btPlanSignature, banner: renderBatchStaleBanner, tickets: getBatchTicketList, inventory: getInventoryFor, castings: () => currentCastings, load: ensureBatchTicketsLoaded };
 
 // ---- The floating "Releasability Board" box (bottom right) — what the current tab drives.
 function msDot(status) { return `<span class="pp-ms-dot pp-ms-${status}"${status === MS.NA ? ' title="N/A"' : ''}></span>`; }
@@ -4554,9 +4679,7 @@ function msBatchCastingId() {
 function ciBoxHtml(castings) {
     return castings.map(c => {
         const s = ciStatus(c.id), st = CI_STATE[s], r = msRow(c.id, 'Casting Inventory');
-        const action = st.next
-            ? `<button type="button" class="pp-ms-btn pp-ms-btn-${s}" data-ms-ci-advance="${escapeAttr(c.id)}">${escapeHtml(st.next)}</button>`
-            : `<button type="button" class="pp-ms-btn pp-ms-btn-unlock" data-ms-ci-unlock="${escapeAttr(c.id)}" title="Unlock to make changes — anything printed from this inventory turns orange on the board once it changes">&#128274; Locked &middot; click to unlock</button>`;
+        const action = ciActionsHtml(c.id, 'data-ms');
         return `<div class="pp-ms-ci pp-ms-ci-${s}" title="${escapeAttr(msNote(r) + (msWhen(r) ? ' · ' + msWhen(r) : ''))}">
             <div class="pp-ms-ci-head">${msDot(s)}<b>${escapeHtml(msCastName(c.id))}</b><span class="pp-ms-ci-state">${escapeHtml(st.label.replace('Casting Inventory — ', ''))}</span></div>
             <div class="pp-ms-ci-actions">${action}</div></div>`;
@@ -4593,6 +4716,8 @@ function updateMsFloat() {
         msFloatEl.addEventListener('click', (e) => {
             const adv = e.target.closest('[data-ms-ci-advance]');
             if (adv) { ciAdvance(adv.dataset.msCiAdvance); return; }
+            const pm = e.target.closest('[data-ms-ci-pm]');
+            if (pm) { ciPmReady(pm.dataset.msCiPm); return; }
             const unl = e.target.closest('[data-ms-ci-unlock]');
             if (unl) { ciUnlock(unl.dataset.msCiUnlock); }
         });
@@ -4650,7 +4775,7 @@ function isCastingInventoryLocked(casting) {
 function showCastingLockedToast(casting) {
     const num = casting?.casting_number || '?';
     if (ciLockedById(casting?.id)) {
-        showToast(`Casting ${num} inventory is final and locked — unlock it in the Releasability box at the right to change it.`, 'error');
+        showToast(`Casting ${num} inventory is ready (final) — press "Make changes" on the casting to edit it.`, 'error');
         return;
     }
     showToast(`Casting ${num} is locked: a later casting has rejected/produced/crated panels.`, 'error');
@@ -5429,6 +5554,16 @@ function renderTrackSection(casting) {
     const rejectedBadge = rejectedCount > 0
         ? `<span class="pp-track-section-rejected-count" title="${rejectedCount} rejected ${rejectedCount === 1 ? 'panel' : 'panels'}">${rejectedCount} rejected</span>`
         : '';
+    // Rejected panels from earlier casts re-cast here — they are in the total above (2026-10-20).
+    const remakeBy = new Map();
+    for (const c of components) {
+        if (!c.remake_of_casting_id) continue;
+        const n = currentCastings.find(x => x.id === c.remake_of_casting_id)?.casting_number || '?';
+        remakeBy.set(n, (remakeBy.get(n) || 0) + 1);
+    }
+    const remakeBadge = remakeBy.size
+        ? `<span class="pp-track-section-remakes" title="Rejected panels from earlier casts re-cast here — counted in the total">incl. ${[...remakeBy].map(([n, k], i) => `${k}${i ? '' : ` rejection${k === 1 ? '' : 's'}`} from cast ${escapeHtml(n)}`).join(', ')}</span>`
+        : '';
     const desc = casting.description ? `<span class="pp-track-section-desc">${escapeHtml(casting.description)}</span>` : '';
 
     const cardsHtml = count === 0
@@ -5497,7 +5632,7 @@ function renderTrackSection(casting) {
                         <span>Tracking</span>
                     </button>
                 </div>
-                <span class="pp-track-section-count">${count} ${count === 1 ? 'component' : 'components'}</span>
+                <span class="pp-track-section-counts"><span class="pp-track-section-count">${count} ${count === 1 ? 'component' : 'components'}</span>${remakeBadge}</span>
                 ${rejectedBadge}
                 ${trackMsHtml(casting.id)}
             </div>
@@ -5638,7 +5773,10 @@ async function runTrackingSync() {
         for (const inv of getInventoryFor(casting.id)) {
             const qty = Math.max(1, parseInt(inv.quantity, 10) || 1);
             const extras = Math.max(0, parseInt(inv.extras, 10) || 0);
+            // A remake row re-casts several rejected panels (one id per piece): each piece points back at its own one.
+            const remakeIds = inv.remake_of_casting_id ? invRemakeIds(inv) : [];
             for (let i = 0; i < qty; i++) {
+                const remakeId = remakeIds[i] || null;
                 expected.push({
                     type: inv.type || null,
                     width: inv.width || null,
@@ -5647,8 +5785,8 @@ async function runTrackingSync() {
                     color: inv.color || null,
                     color_log_id: inv.color_log_id || null,
                     sealer: inv.sealer || null,
-                    remake_of_panel_id: inv.remake_of_panel_id || null,
-                    remake_of_casting_id: inv.remake_of_casting_id || null
+                    remake_of_panel_id: remakeId,
+                    remake_of_casting_id: remakeId ? inv.remake_of_casting_id : null
                 });
             }
             for (let i = 0; i < extras; i++) {
@@ -5660,8 +5798,8 @@ async function runTrackingSync() {
                     color: inv.color || null,
                     color_log_id: inv.color_log_id || null,
                     sealer: inv.sealer || null,
-                    remake_of_panel_id: inv.remake_of_panel_id || null,
-                    remake_of_casting_id: inv.remake_of_casting_id || null
+                    remake_of_panel_id: null,
+                    remake_of_casting_id: null
                 });
             }
         }
@@ -7123,8 +7261,10 @@ function buildColorLogSelectHtml(selectedId, opts = {}) {
         return `<option value="${escapeHtml(l.id)}"${sel}>${escapeHtml(l.name || '(unnamed)')}</option>`;
     }).join('');
     // Auto-select first when nothing matches (e.g. legacy row with null FK).
-    const placeholderOpt = selectedId && !currentColorLogs.some(l => l.id === selectedId)
-        ? `<option value="" disabled selected>— Pick color log —</option>`
+    // No colour stored (or one that no longer exists): say so instead of letting the browser show the first log
+    // as if it were chosen — that is how whole castings ended up printing "no color in the inventory" (2026-10-22).
+    const placeholderOpt = !selectedId || !currentColorLogs.some(l => l.id === selectedId)
+        ? `<option value="" selected>— Pick color —</option>`
         : '';
     return `<select class="${cls}" ${dataAttrs}>${placeholderOpt}${options}</select>`;
 }
@@ -8948,6 +9088,8 @@ function wireEvents() {
             handleDeleteCasting(castingId);
         } else if (action === 'ms-ci-advance') {
             ciAdvance(castingId);
+        } else if (action === 'ms-ci-pm') {
+            ciPmReady(castingId);
         } else if (action === 'ms-ci-unlock') {
             ciUnlock(castingId);
         } else if (action === 'toggle-inventory') {
@@ -9244,6 +9386,7 @@ function renderSpecialBatching() {
     }
     const popout = document.getElementById('pp-bt-special-popout');
     if (popout) popout.href = special.href + '?project=' + encodeURIComponent(currentProjectNumber);
+    updateSpecialUpdatingBanner();
     return true;
 }
 
@@ -9280,11 +9423,14 @@ window.addEventListener('message', (e) => {
         printGate(ids, 'Batching Sheets').then(ok => frame.contentWindow?.postMessage({ type: ok ? 'jsb-print-ok' : 'jsb-print-no', token: e.data.token }, location.origin));
     } else if (e.data?.type === 'jsb-printed') {
         stampPrinted(Array.isArray(e.data.ids) ? e.data.ids : [], 'Batching Sheets');
+    } else if (e.data?.type === 'jsb-reprint-verdict') {
+        specialReprintWaiting.get(e.data.token)?.(e.data.verdict);
     } else if (e.data?.type === 'jsb-stale') {
         // The special page's own out-of-date warning: where it sits (relative to the frame) and what it says.
         frameStale = Array.isArray(e.data.diffs) ? { diffs: e.data.diffs, fresh: !!e.data.fresh, info: e.data.info || null, top: Number(e.data.top) || 0, height: Number(e.data.height) || 0 } : null;
         frameCasts = Array.isArray(e.data.casts) ? { casts: e.data.casts, top: Number(e.data.pillsTop) || 0, height: Number(e.data.pillsHeight) || 0 } : null;
         updateFloats();
+        updateSpecialUpdatingBanner();
     }
 });
 
@@ -9443,6 +9589,12 @@ function renderBatchStaleBanner(casting, ticket) {
     const diffs = [];
     if (differs(ticket.cuFt, t.cuFt, t.cuFtComplete)) diffs.push(['Total Cu Ft', ticket.cuFt, t.cuFt]);
     if (differs(ticket.faceSqFt, t.ff, t.ffComplete)) diffs.push(['Face Sq Ft', ticket.faceSqFt, t.ff]);
+    if (diffs.length && t.cuFtComplete && t.ffComplete && btTicketSameAsInventory(casting, ticket, t)) {
+        return `<div class="pp-bt-stale pp-bt-fresh" role="status" data-fresh="1">
+            <div class="pp-bt-stale-title">&#10003; TICKETS STILL RIGHT &mdash; THE BATCHES DO NOT CHANGE</div>
+            <div class="pp-bt-stale-text">The Casting Inventory totals moved (${escapeHtml(diffs.map(([label, was, now]) => `${label} ${was} → ${now}`).join(' · '))}) but these tickets come out the same. No reprint needed. <button type="button" class="pp-bt-stale-link" data-bt-import>Import the new totals anyway</button></div>
+        </div>`;
+    }
     if (!diffs.length) {
         // Nothing differs: say so in green (same spot, same floating copy) — but only when something was compared.
         const typed = (v) => v !== null && v !== undefined && String(v).trim() !== '';
@@ -9464,6 +9616,64 @@ function renderBatchStaleBanner(casting, ticket) {
         </table>
         <button type="button" class="pp-bt-stale-btn" data-bt-import>Import from Tracking now</button>
         <div class="pp-bt-stale-note">Importing replaces Total Cu Ft and Face Sq Ft only (hand-picked batch types go back to automatic). Everything else on the ticket stays.</div>
+    </div>`;
+}
+
+// ---- Do the tickets change? (2026-10-20) The printed batches depend on Total Cu Ft / Face Sq Ft through the batch
+// plan; comparing the plan the ticket was made from with the plan the inventory gives now tells whether a reprint is
+// needed, even when the totals moved a little.
+function btPlanSignature(casting, ticket, cuFt, faceSqFt) {
+    const totalCuFt = parseFloat(cuFt);
+    if (!totalCuFt || totalCuFt <= 0) return 'none';
+    const activeLog = getActiveBatchColorLog(casting, ticket);
+    const sandLbs = getColorLogSandLbs(activeLog);
+    if (!sandLbs) return 'none';
+    const plan = buildBatchPlan({
+        totalCuFt,
+        faceSqFt: parseFloat(faceSqFt) || 0,
+        cuFtPer250: parseFloat(ticket.cuFtPer250) || 4.28,
+        castMethod: activeLog?.castMethod || 'sprayUp',
+        colorLogSandLbs: sandLbs,
+        manualOverrides: btOverrides(ticket)
+    });
+    return JSON.stringify([Math.round((plan.faceCuFt || 0) * 1000) / 1000, plan.batches.map(b => [b.batchSandLbs, b.type, Math.round(b.cuFt * 1000) / 1000])]);
+}
+/** One ticket: would it print the same batches from the inventory as it is now? */
+function btTicketSameAsInventory(casting, ticket, totals) {
+    const was = btPlanSignature(casting, ticket, ticket.cuFt, ticket.faceSqFt);
+    return was !== 'none' && was === btPlanSignature(casting, ticket, totals.cuFt, totals.ff);
+}
+/** Every batched ticket of the casting: 'same', 'changed', or 'none' (nothing batched / inventory cannot be totalled). */
+function btReprintCheck(castingId) {
+    const casting = currentCastings.find(c => c.id === castingId);
+    if (!casting) return 'none';
+    let seen = false;
+    for (const ticket of getBatchTicketList(castingId)) {
+        if (ticket.cuFt === null || ticket.cuFt === undefined || String(ticket.cuFt).trim() === '') continue;
+        const t = batchInventoryTotals(castingId, ticket);
+        if (!t) return 'changed';   // this ticket's colour has no inventory rows any more
+        if (!t.cuFtComplete || !t.ffComplete) return 'none';
+        seen = true;
+        if (!btTicketSameAsInventory(casting, ticket, t)) return 'changed';
+    }
+    return seen ? 'same' : 'none';
+}
+async function ensureBatchTicketsLoaded() {
+    if (batchTicketsLoadedFor === currentProjectNumber) return;
+    const map = await loadBatchTicketsForCastings(currentCastings.map(c => c.id));
+    batchTickets.clear();
+    currentBatchColorSel.clear();
+    for (const c of currentCastings) batchTickets.set(c.id, map.get(c.id) || []);
+    batchTicketsLoadedFor = currentProjectNumber;
+}
+/** While the inventory is being changed (or was never marked ready) and tickets were printed from it: wait. */
+function renderBatchUpdatingBanner(casting) {
+    if (!msOn() || ciFinal(casting.id) || !msRow(casting.id, 'Batching Sheets')) return '';
+    const note = msNote(msRow(casting.id, 'Casting Inventory'));
+    const changing = note.startsWith('Unlocked for changes') || note.startsWith(CI_PM_NOTE) || note.startsWith(CI_ENTERING_NOTE);
+    return `<div class="pp-bt-updating" role="status">
+        <div class="pp-bt-updating-title">&#9888; CASTING INVENTORY ${changing ? 'IS BEING UPDATED' : 'IS NOT READY YET'}</div>
+        <div class="pp-bt-updating-text">Wait until engineering marks it ready (Castings tab). The portal then says whether these tickets need to be printed again.</div>
     </div>`;
 }
 
@@ -9715,7 +9925,7 @@ function renderBatchTicketBody(casting, ticket, multi = false) {
                 </div>
             </div>
 
-            <div data-bt-stale-wrap>${renderBatchStaleBanner(casting, ticket)}</div>
+            <div data-bt-stale-wrap>${renderBatchUpdatingBanner(casting)}${renderBatchStaleBanner(casting, ticket)}</div>
             <div class="pp-bt-card">
                 <div class="pp-bt-card-head">
                     <h3 class="pp-bt-card-title">Batch Plan</h3>
@@ -10579,7 +10789,7 @@ function handleBatchFieldInput(castingId, field, value) {
             // The out-of-date warning compares these two with the Casting Inventory — keep it current while typing.
             const wrap = document.querySelector('#pp-bt-content [data-bt-stale-wrap]');
             const casting2 = currentCastings.find(c => c.id === castingId);
-            if (wrap && casting2) { wrap.innerHTML = renderBatchStaleBanner(casting2, ticket); updateFloats(); }
+            if (wrap && casting2) { wrap.innerHTML = renderBatchUpdatingBanner(casting2) + renderBatchStaleBanner(casting2, ticket); updateFloats(); }
         }
     }
     scheduleBatchTicketSave(castingId, ticket);
