@@ -54,7 +54,7 @@ export function makeTaskCardEditable(taskCard) {
     // weekly_tasks row.
     const task = state.getAllTasks().find(t => t.id === taskId);
     if (task && (task.department === 'Cast' || (task.isManual && task.department === 'Demold'))) {
-        const originalSide = (task.castingSide === 'A' || task.castingSide === 'B') ? task.castingSide : '';
+        const originalSide = ['A', 'B', 'AB'].includes(task.castingSide) ? task.castingSide : '';
         taskCard.dataset.originalCastingSide = originalSide;
 
         const sideSelect = document.createElement('select');
@@ -63,7 +63,8 @@ export function makeTaskCardEditable(taskCard) {
         [
             { value: '', label: 'No side' },
             { value: 'A', label: 'Side A' },
-            { value: 'B', label: 'Side B' }
+            { value: 'B', label: 'Side B' },
+            { value: 'AB', label: 'Both — A and B' }
         ].forEach(opt => {
             const o = document.createElement('option');
             o.value = opt.value;
@@ -160,6 +161,19 @@ export async function saveTaskCardEdit(taskCard) {
                 await saveToStaging(task.project, [entry]);
             }
 
+            // Side A/B is a property of the casting: write it to the portal's casting too, and keep the
+            // other cards of the same casting (Cast + Demold days) in step (2026-10-22).
+            if (newCastingSide !== undefined && task.castingId) {
+                try {
+                    const { updateCasting } = await import('../services/castings-service.js');
+                    await updateCasting(task.castingId, { casting_side: newCastingSide });
+                    for (const o of allTasks) {
+                        if (o !== task && o.castingId === task.castingId && (o.department === 'Cast' || o.department === 'Demold')) o.castingSide = newCastingSide;
+                    }
+                } catch (err) {
+                    logger.error('[task-card-editor] casting side not saved to the portal (run migration/casting-side.sql?):', err);
+                }
+            }
             // Send refresh signal to other clients
             await supabaseService.sendRefreshSignal({
                 operation: 'task_description_update',
@@ -236,7 +250,7 @@ function restoreTaskCardView(taskCard, description, castingSide) {
     // cancel (castingSide === undefined) so we leave the existing badge alone.
     if (castingSide !== undefined) {
         let badge = taskCard.querySelector('.task-casting-side');
-        const wantBadge = castingSide === 'A' || castingSide === 'B';
+        const wantBadge = castingSide === 'A' || castingSide === 'B' || castingSide === 'AB';
         if (wantBadge) {
             if (!badge) {
                 badge = document.createElement('div');
@@ -249,7 +263,7 @@ function restoreTaskCardView(taskCard, description, castingSide) {
                     taskCard.prepend(badge);
                 }
             }
-            badge.textContent = `Side ${castingSide}`;
+            badge.textContent = (castingSide === 'AB' ? 'Side A + B' : `Side ${castingSide}`);
         } else if (badge) {
             badge.remove();
         }

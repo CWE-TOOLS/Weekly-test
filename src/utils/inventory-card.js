@@ -24,6 +24,29 @@ export function invSummaryTitle(inv) {
 }
 
 /** Wording of the batch-print warning band, or '' when there is nothing to say. */
+/** Message for a casting-linked card whose casting has no inventory pieces ('' when there is nothing to say). */
+export function invMissingText(task) {
+    if (!task || String(task.projectNumber || '').trim() === '' || String(task.castingNumber || '').trim() === '') return '';
+    if (task.invSummary && task.invSummary.pcs > 0) return '';
+    if (typeof task.piecesCount === 'number' && task.piecesCount > 0) return '';
+    if (task.castingInPortal === undefined) return '';          // portal data did not load: say nothing rather than something wrong
+    return task.castingInPortal ? 'NO CASTING INVENTORY YET' : 'CAST NOT FOUND IN THE PORTAL';
+}
+
+/** "SPECIAL CONDITION — SIDE A: vertical curing racks" for a Cast card whose casting has one ('' otherwise). */
+export function layoutConditionText(task) {
+    const c = task && task.layoutCondition;
+    if (!c || !c.name) return '';
+    return `SPECIAL CONDITION${c.side ? ' \u2014 SIDE ' + (c.side === 'AB' ? 'A + B' : c.side) : ''}: ${c.name}`;
+}
+
+/** 'Side A' / 'Side B' / 'Side A + B' for a stored casting side ('' otherwise). */
+export function castingSideText(side) {
+    if (side === 'A' || side === 'B') return `Side ${side}`;
+    if (side === 'AB') return 'Side A + B';
+    return '';
+}
+
 export function batchPrintText(state) {
     if (state === 'unprinted') return 'BATCH TICKETS NOT PRINTED YET';
     if (state === 'reprint') return 'BATCH TICKETS CHANGED — PRINT AGAIN';

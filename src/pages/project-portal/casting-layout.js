@@ -303,6 +303,7 @@ function buildMolds(components, offsetPerSide) {
     }
     molds.push({
       componentId: c.id || null,
+      type: (c.type || '').trim(),
       label: (c.panel_id || c.type || `Panel ${i + 1}`).trim(),
       color: colorByType.get(typeKey),
       concreteW: w,
@@ -478,6 +479,29 @@ function layoutStaging(staged, maxWidth, startY, gapBetween = 0) {
  * concrete panel itself. The dimension label shows the concrete dims —
  * the mold offset is constant and reported once in the summary text.
  */
+// ---- Labels that fit (2026-10-23) ----
+// A label is drawn horizontally when it fits, turned along the mold's long side when that is the only way,
+// shrunk down to LABEL_MIN_FONT when it still does not fit, and replaced by a small index number (with a
+// legend under the tables) when even that is too big. Narrow Fairfield-style pieces used to overprint each other.
+const LABEL_MIN_FONT = 5.5;
+const LABEL_CHAR_W = 0.62;   // average glyph width as a fraction of the font size (bold sans)
+const LABEL_PAD = 2;
+
+/** Decide how the label of a placed mold is drawn: { mode: 'h' | 'v' | 'n', font } */
+function labelModeFor(rec, ts, fontSize) {
+  const mw = ts(rec.sw), mh = ts(rec.sh);
+  const chars = Math.max(1, String(rec.mold.label || '').length);
+  const need = (f) => chars * f * 0.85 * LABEL_CHAR_W;     // width of the label line at font f
+  const lines = (f) => f * 1.15;                            // one line: the label only (dims were dropped 2026-10-23)
+  if (need(fontSize) <= mw - LABEL_PAD && lines(fontSize) <= mh) return { mode: 'h', font: fontSize };
+  if (need(fontSize) <= mh - LABEL_PAD && lines(fontSize) <= mw) return { mode: 'v', font: fontSize };
+  const horizontal = mw >= mh;
+  const along = horizontal ? mw : mh, across = horizontal ? mh : mw;
+  const f = Math.min(fontSize, (along - LABEL_PAD) / (chars * 0.85 * LABEL_CHAR_W), across / 1.15);
+  if (f >= LABEL_MIN_FONT) return { mode: horizontal ? 'h' : 'v', font: f };
+  return { mode: 'n', font: Math.max(4, Math.min(fontSize, across * 0.8, (along - LABEL_PAD) / 0.7)) };
+}
+
 function buildMoldGroup(NS, rec, tx, ty, ts, fontSize, offsetPerSide) {
   const g = document.createElementNS(NS, 'g');
   g.setAttribute('class', rec.staged ? 'clay-mold clay-mold-overflow' : 'clay-mold');
@@ -494,10 +518,27 @@ function buildMoldGroup(NS, rec, tx, ty, ts, fontSize, offsetPerSide) {
     g.appendChild(innerRect);
   }
 
-  g.appendChild(svgText(NS, mx + mw / 2, my + mh / 2 - fontSize * 0.4, rec.mold.label, fontSize * 0.85, '#222', 'bold'));
-  g.appendChild(svgText(NS, mx + mw / 2, my + mh / 2 + fontSize * 0.4, `${frac(rec.mold.concreteW)} x ${frac(rec.mold.concreteL)}`, fontSize * 0.65, '#444', 'normal'));
+  const lm = rec.labelMode || labelModeFor(rec, ts, fontSize);
+  const cx = mx + mw / 2, cy = my + mh / 2;
+  const dims = `${frac(rec.mold.concreteW)} x ${frac(rec.mold.concreteL)}`;
+  if (lm.mode === 'n') {
+    // too small for text: the label sits in the margin on the end of a thin leader line (drawn by the caller)
+    const title = document.createElementNS(NS, 'title');
+    title.textContent = `${rec.mold.label} — ${dims}`;
+    g.appendChild(title);
+    return g;
+  }
+  const f = lm.font;
+  // Label only — the size is on the inventory and in the legend; it only cluttered the molds (user, 2026-10-23).
+  const t1 = svgText(NS, cx, cy, rec.mold.label, f * 0.85, '#222', 'bold');
+  if (lm.mode === 'v') t1.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
+  const title = document.createElementNS(NS, 'title');
+  title.textContent = `${rec.mold.label} — ${dims}`;
+  g.appendChild(title);
+  g.appendChild(t1);
   return g;
 }
+
 
 /**
  * Render a casting layout diagram into a container.
@@ -514,7 +555,7 @@ function buildMoldGroup(NS, rec, tx, ty, ts, fontSize, offsetPerSide) {
  * @returns {Object|null} layout handle {mode, area, svg, transform, tableDefs,
  *        placed, unplaced}, or null when there is nothing to draw
  */
-export function renderCastingLayout({ container, errorEl, components, title, area = 'B', offsetPerSide = 4, gapBetween = 0, positions = null }) {
+export function renderCastingLayout({ container, errorEl, components, title, area = 'B', offsetPerSide = 4, gapBetween = 0, positions = null, overflowLabel = null, hideOverflow = false }) {
   if (!container) return null;
   container.innerHTML = '';
   if (errorEl) errorEl.textContent = '';
@@ -559,23 +600,42 @@ export function renderCastingLayout({ container, errorEl, components, title, are
   const stagingStartY = contentMaxY + 34;
   let overallMaxX = contentMaxX;
   let overallMaxY = contentMaxY;
-  if (staged.length > 0) {
+  if (staged.length > 0 && !hideOverflow) {
     overallMaxY = layoutStaging(staged, contentMaxX, stagingStartY, gapBetween);
     for (const rec of staged) overallMaxX = Math.max(overallMaxX, rec.sx + rec.sw);
+  } else if (staged.length > 0) {
+    overallMaxY = stagingStartY;   // just the "continues on the other side" line below the tables
   }
 
   const availW = pageW - 40;
+  const fontSize = 9;
+  // Molds too small for a label get a callout: a thin leader line to the panel id in the left or right margin
+  // (whichever is nearer), like a shop drawing. The margins take room from the width, which changes the scale,
+  // which changes which labels fit — so settle it in a couple of passes.
+  const allRecs = [...placed, ...staged];
+  const CALLOUT_ROW_H = fontSize * 1.05;
+  const gutterFor = (recs) => Math.min(150, Math.max(0, ...recs.map(r => String(r.mold.label || '').length)) * fontSize * 0.85 * LABEL_CHAR_W + 16);
+  let gutterL = 0, gutterR = 0, scale = 1, callouts = [];
+  for (let pass = 0; pass < 4; pass++) {
+    const availWp = pageW - 40 - gutterL - gutterR;
+    const availH = pageH - headerH - 40;
+    scale = Math.min(availWp / overallMaxX, availH / overallMaxY);
+    const tsP = (v) => v * scale;
+    for (const rec of allRecs) rec.labelMode = labelModeFor(rec, tsP, fontSize);
+    callouts = allRecs.filter(r => r.labelMode.mode === 'n');
+    const left = callouts.filter(r => (r.sx + r.sw / 2) < overallMaxX / 2), right = callouts.filter(r => (r.sx + r.sw / 2) >= overallMaxX / 2);
+    const wantL = left.length ? gutterFor(left) : 0, wantR = right.length ? gutterFor(right) : 0;
+    if (wantL === gutterL && wantR === gutterR) break;
+    gutterL = wantL; gutterR = wantR;
+  }
   const availH = pageH - headerH - 40;
-  const scale = Math.min(availW / overallMaxX, availH / overallMaxY);
-  const offsetX = (pageW - overallMaxX * scale) / 2;
+  const availWp = pageW - 40 - gutterL - gutterR;
+  const offsetX = 20 + gutterL + (availWp - overallMaxX * scale) / 2;
   const offsetY = headerH + (availH - overallMaxY * scale) / 2;
-
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${pageW} ${pageH}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-
-  const fontSize = 9;
   const tableColor = '#e5e7eb';
   const tableBorder = '#9ca3af';
 
@@ -607,19 +667,51 @@ export function renderCastingLayout({ container, errorEl, components, title, are
   // draggable clay-mold in the same coordinate space as the tables. Drag one
   // onto a table to place it.
   if (staged.length > 0) {
-    svg.appendChild(svgText(NS, tx(overallMaxX / 2), ty(stagingLabelY), 'OVERFLOW — drag a form onto a table to place it', fontSize * 1.05, '#dc2626', 'bold'));
-    for (const rec of staged) {
+    svg.appendChild(svgText(NS, tx(overallMaxX / 2), ty(stagingLabelY), (overflowLabel ? `${staged.length} ${staged.length === 1 ? 'FORM' : 'FORMS'} — ${overflowLabel}` : 'OVERFLOW — drag a form onto a table to place it'), fontSize * 1.05, overflowLabel ? '#1d4ed8' : '#dc2626', 'bold'));
+    if (!hideOverflow) for (const rec of staged) {
       svg.appendChild(buildMoldGroup(NS, rec, tx, ty, ts, fontSize, offsetPerSide));
     }
   }
 
   // Title + summary
+  if (callouts.length) {
+    // Leader lines: each small mold gets a label in the nearer margin; labels are stacked in mold order (top to
+    // bottom) and spread apart so they never overlap, then a thin line joins the mold's centre to the label.
+    const mid = tx(overallMaxX / 2);
+    const place = (recs, side) => {
+      recs.sort((a, b) => (a.sy + a.sh / 2) - (b.sy + b.sh / 2));
+      const minY = headerH + 6, maxY = pageH - 10;
+      const ys = recs.map(r => ty(r.sy + r.sh / 2));
+      for (let i = 1; i < ys.length; i++) if (ys[i] < ys[i - 1] + CALLOUT_ROW_H) ys[i] = ys[i - 1] + CALLOUT_ROW_H;   // push down
+      for (let i = ys.length - 1; i >= 0; i--) {                                                                   // then pull back up from the bottom
+        const cap = i === ys.length - 1 ? maxY : ys[i + 1] - CALLOUT_ROW_H;
+        if (ys[i] > cap) ys[i] = cap;
+      }
+      for (let i = 0; i < ys.length; i++) if (ys[i] < minY) ys[i] = minY;
+      recs.forEach((rec, i) => {
+        const cx = tx(rec.sx + rec.sw / 2), cy = ty(rec.sy + rec.sh / 2), ly = ys[i];
+        const lx = side === 'left' ? 20 + gutterL - 6 : pageW - 20 - gutterR + 6;
+        const line = document.createElementNS(NS, 'line');
+        line.setAttribute('x1', cx); line.setAttribute('y1', cy); line.setAttribute('x2', lx); line.setAttribute('y2', ly);
+        line.setAttribute('stroke', '#111'); line.setAttribute('stroke-width', 0.45);
+        svg.appendChild(line);
+        const dot = document.createElementNS(NS, 'circle');
+        dot.setAttribute('cx', cx); dot.setAttribute('cy', cy); dot.setAttribute('r', 0.9); dot.setAttribute('fill', '#111');
+        svg.appendChild(dot);
+        const t = svgText(NS, side === 'left' ? lx - 3 : lx + 3, ly, rec.mold.label, fontSize * 0.85, '#111', 'bold');
+        t.setAttribute('text-anchor', side === 'left' ? 'end' : 'start');
+        svg.appendChild(t);
+      });
+    };
+    place(callouts.filter(r => tx(r.sx + r.sw / 2) < mid), 'left');
+    place(callouts.filter(r => tx(r.sx + r.sw / 2) >= mid), 'right');
+  }
   const totalMolds = molds.length;
   const summaryStr = (mode === 'manual'
       ? `${totalMolds} molds — manual layout`
         + (staged.length > 0 ? ` — ${staged.length} not placed` : '')
       : `${totalMolds} molds — ${totalMolds - staged.length} on tables`
-        + (staged.length > 0 ? ` — ${staged.length} overflow` : ''))
+        + (staged.length > 0 ? (hideOverflow ? ` — ${staged.length} continue on the other side` : ` — ${staged.length} overflow`) : ''))
     + ` — +${frac(offsetPerSide)}/side mold offset`;
   svg.appendChild(svgText(NS, pageW / 2, 18, title || 'Casting Layout', fontSize * 1.5, '#222', 'bold'));
   svg.appendChild(svgText(NS, pageW / 2, 38, summaryStr, fontSize, staged.length > 0 ? '#dc2626' : '#555', 'normal'));

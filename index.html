@@ -3,6 +3,7 @@
 <head>
 <script>
 (function () {
+  window.__SCHEDULER_CREW_PREVIEW = true;   // test site only: the weekly shows the Plant Scheduler's crew on its cards
   var realFetch = window.fetch.bind(window);
   // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
   window.addEventListener('error', function (e) {
@@ -453,6 +454,7 @@
                                     <option value="">No side</option>
                                     <option value="A">Side A</option>
                                     <option value="B">Side B</option>
+                                    <option value="AB">Both — A and B</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -532,7 +534,7 @@
     </div>
 
     <!-- Main Application Entry Point (ES6 Module) -->
-    <script type="module" src="src/main.js?v=2026102201"></script>
+    <script type="module" src="src/main.js?v=2026102302"></script>
 
     <!-- Google Translate Widget -->
     <script type="text/javascript">
@@ -545,9 +547,18 @@
         }, 'google_translate_element');
       }
     </script>
-    <script type="text/javascript" src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
     <script type="text/javascript">
       (function() {
+        // The Google Translate widget (about a second of script on every open) loads only when a language other
+        // than English is wanted: picked now, or remembered in the cookie from before. 2026-10-23
+        let translateLoading = false;
+        function loadTranslate() {
+          if (translateLoading || document.querySelector('.goog-te-combo')) return;
+          translateLoading = true;
+          const s = document.createElement('script');
+          s.src = '//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit';
+          document.body.appendChild(s);
+        }
         function setLang(lang) {
           // Google Translate uses a cookie to remember language; also trigger via the hidden select
           document.cookie = 'googtrans=/en/' + lang + ';path=/';
@@ -556,9 +567,8 @@
           if (select) {
             select.value = lang === 'en' ? '' : lang;
             select.dispatchEvent(new Event('change'));
-          } else {
-            // If widget hasn't loaded yet, reload with cookie set
-            location.reload();
+          } else if (lang !== 'en') {
+            loadTranslate();   // the widget reads the cookie when it initialises and translates straight away
           }
         }
         // Restore on load from cookie
@@ -569,10 +579,13 @@
         document.addEventListener('DOMContentLoaded', () => {
           const customSelect = document.getElementById('lang-select');
           if (!customSelect) return;
-          customSelect.value = getCurrentLang();
+          const lang = getCurrentLang();
+          customSelect.value = lang;
+          if (lang !== 'en') loadTranslate();
           customSelect.addEventListener('change', (e) => setLang(e.target.value));
         });
       })();
     </script>
+    <script type="module" src="src/utils/auto-update.js?v=20261023-1"></script>
 </body>
 </html>

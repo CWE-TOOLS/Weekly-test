@@ -5,7 +5,7 @@
  */
 
 import { getIsEditingUnlocked } from '../core/state.js';
-import { invSummaryLine, invSummaryTitle, batchPrintText, INV_TYPES_COLLAPSE_AT } from '../utils/inventory-card.js';
+import { invSummaryLine, invSummaryTitle, batchPrintText, invMissingText, layoutConditionText, castingSideText, INV_TYPES_COLLAPSE_AT } from '../utils/inventory-card.js';
 import { getActualHours } from './modals/actual-hours-modal.js';
 import { RENDERING } from '../config/rendering-constants.js';
 import { normalizeDepartmentClass } from '../config/department-config.js';
@@ -78,11 +78,19 @@ export function createTaskCard(task, rowClass, isEditingUnlocked) {
 
     // Casting side (A/B) — Cast-department only, rendered when a side has been
     // selected for this task. Stored in task_descriptions.casting_side.
-    if (task.castingSide === 'A' || task.castingSide === 'B') {
+    if (castingSideText(task.castingSide)) {
         const sideDiv = document.createElement('div');
         sideDiv.className = 'task-casting-side';
-        sideDiv.textContent = `Side ${task.castingSide}`;
+        sideDiv.textContent = castingSideText(task.castingSide);
         card.appendChild(sideDiv);
+    }
+    // Special layout condition from the portal's Casting Layout tab (Cast cards; 2026-10-22).
+    if (task.department === 'Cast' && layoutConditionText(task)) {
+        const condDiv = document.createElement('div');
+        condDiv.className = 'task-layout-cond';
+        condDiv.textContent = layoutConditionText(task);
+        condDiv.title = 'Set in the portal: Casting Layout tab, special condition';
+        card.appendChild(condDiv);
     }
 
     // Project manager (from projects table) — falls back to the Google Sheet
@@ -157,8 +165,9 @@ export function createTaskCard(task, rowClass, isEditingUnlocked) {
         card.appendChild(list);
     } else if (typeof task.piecesCount === 'number' && task.piecesCount > 0) {
         appendBand('task-pieces-count', `${task.piecesCount} pcs`);
-    } else if (isCastCastingLinked) {
-        appendBand('task-pieces-count', 'Missing pcs count', true);
+    } else if (invMissingText(task)) {
+        // Any department of a casting-linked job: say plainly that the portal has no inventory for this cast (2026-10-22).
+        appendBand('task-pieces-count task-inv-missing', invMissingText(task), true);
     }
 
     // Color log title — name(s) of the color log(s) used by this casting's

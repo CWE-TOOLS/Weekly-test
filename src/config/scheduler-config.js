@@ -21,8 +21,8 @@
 
 /** The day columns, in the Optimizer's order. Mill was split into CNC and Parts on 2026-10-19 (both are the weekly's Mill). */
 export const DEPARTMENTS = [
-    { key: 'CNC',   label: 'CNC',   weekly: 'CNC' },
-    { key: 'Parts', label: 'Parts', weekly: 'Parts' },
+    { key: 'CNC',   label: 'CNC',   weekly: 'Mill' },
+    { key: 'Parts', label: 'Parts', weekly: 'Mill' },
     { key: 'FO',    label: 'FO',    weekly: 'Form Out' },
     { key: 'Cast',  label: 'Cast',  weekly: 'Cast' },
     { key: 'DM',    label: 'DM',    weekly: 'Demold' },
@@ -70,30 +70,6 @@ export const TASK_CODES = Object.keys(TASKS);
 /** Task codes a department column accepts. */
 export function tasksForDept(dept) {
     return TASK_CODES.filter(code => TASKS[code].includes(dept));
-}
-
-/** A staging / weekly department name -> the scheduler's team ("FormOut", "Form Out", "Mill", "Load" … are free text). */
-export function teamOfDepartment(name) {
-    const n = String(name || '').toLowerCase().replace(/[^a-z]/g, '');
-    if (!n) return null;
-    if (n === 'cnc') return 'CNC';
-    if (n === 'parts' || n === 'mill') return 'Parts';
-    if (n === 'formout' || n === 'fo') return 'FO';
-    if (n === 'cast') return 'Cast';
-    if (n === 'demold' || n === 'dm') return 'DM';
-    if (n === 'finish' || n === 'f') return 'F';
-    if (n === 'seal') return 'Seal';
-    if (n === 'crating' || n === 'crate') return 'Crate';
-    if (n === 'special' || n === 'spec') return 'Spec';
-    if (n === 'ship' || n === 'load' || n === 'shipping') return 'Ship';
-    return null;
-}
-/** The Staging tab's department name for each team (used when a team has no staging department yet). */
-export const STAGING_NAME_OF_TEAM = { CNC: 'CNC', Parts: 'Parts', FO: 'Form Out', Cast: 'Cast', DM: 'Demold', F: 'Finish', Seal: 'Seal', Crate: 'Crating', Spec: 'Special', Ship: 'Ship' };
-/** The tasks a staging department may carry (by its team); [] for departments outside the plant teams. */
-export function tasksForDepartment(name) {
-    const team = teamOfDepartment(name);
-    return team ? tasksForDept(team) : [];
 }
 
 /**
@@ -155,20 +131,6 @@ export const DEFAULT_HOLIDAYS = [
 
 /** Most castings a team takes on one day before the day header turns red (user rule 2026-10-20). Teams not listed: no limit. */
 export const TEAM_DAY_LIMITS = { Parts: 1, FO: 1, Cast: 1, DM: 1, F: 5, Seal: 5, Spec: 5 };
-
-/** The plant crew by team (user 2026-10-23). Editable on the scheduler's Settings; this is the seed. Mill = Parts. */
-export const DEFAULT_CREW = {
-    CNC:   { leader: '',        people: [] },                 // CNC needs no people (user 2026-10-23)
-    Parts: { leader: 'Nick',    people: ['Raidel', 'Ryan'] },
-    FO:    { leader: 'Nick',    people: ['Raul', 'Sergio'] },
-    Cast:  { leader: 'Simche',  people: ['Juan', 'Manuel', 'Elmar', 'Gabriele', 'Luciano', 'Leodan', 'Raul', 'Shaquile'] },
-    DM:    { leader: 'Simche',  people: ['Tino', 'Arturo'] },
-    F:     { leader: 'Andres',  people: ['Luis', 'Oscar'] },
-    Seal:  { leader: 'Andres',  people: ['Florentino'] },
-    Crate: { leader: 'Arnulfo', people: ['Luis', 'Gabriele'] },
-    Spec:  { leader: 'Arnulfo', people: ['Lizandro', 'Tony'] },
-    Ship:  { leader: '',        people: [] }
-};
 
 /** Revenue per labor hour (the Optimizer's Rev tab). */
 export const REVENUE_PER_HOUR = 135;

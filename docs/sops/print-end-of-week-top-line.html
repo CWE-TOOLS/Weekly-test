@@ -3,6 +3,7 @@
 <head>
 <script>
 (function () {
+  window.__SCHEDULER_CREW_PREVIEW = true;   // test site only: the weekly shows the Plant Scheduler's crew on its cards
   var realFetch = window.fetch.bind(window);
   // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
   window.addEventListener('error', function (e) {

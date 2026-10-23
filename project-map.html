@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  window.__SCHEDULER_CREW_PREVIEW = true;   // test site only: the weekly shows the Plant Scheduler's crew on its cards
+  var realFetch = window.fetch.bind(window);
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;
+    if (/\/rest\/v1\/task_descriptions/i.test(url) && /0860/.test(url + ' ' + String(body || '')) && /casting_number(=eq\.|":")Test/.test(url + ' ' + String(body || ''))) return false;   // Staging task/hours on job 0860 casting "Test" save for real   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test" (inventory, batching, Staging tasks + hours): those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+  });
+})();
+</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Map - Weekly Schedule</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%8F%AD%3C/text%3E%3C/svg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="src/styles/variables.css">
+    <link rel="stylesheet" href="src/styles/base.css">
+    <link rel="stylesheet" href="src/styles/buttons.css">
+    <link rel="stylesheet" href="src/styles/finishing-map.css?v=20261022-10">
+    <link rel="stylesheet" href="src/styles/project-map.css?v=20261023-12">
+</head>
+<body class="pm-body">
+    <div id="fm-app" class="fm-app pm-app">
+        <header class="fm-header">
+            <div class="fm-header-left">
+                <a href="project-portal.html" class="fm-nav-btn" title="Project Portal">&larr; Project Portal</a>
+                <a href="index.html" class="fm-nav-btn" title="Weekly Schedule">Weekly Schedule</a>
+                <a href="releasability.html" class="fm-nav-btn" title="Releasability Board">Releasability Board</a>
+                <a href="finishing-map.html" class="fm-nav-btn fm-nav-sibling" title="Finishing Map">Finishing Map</a>
+            </div>
+            <h1 class="fm-title">Project Map</h1>
+            <div class="pm-when">
+                <div class="pm-view-stack">
+                    <div class="pm-view" role="group" aria-label="View">
+                        <button type="button" class="pm-view-btn pm-view-on" data-view="day">Day</button>
+                        <button type="button" class="pm-view-btn" data-view="week">Week</button>
+                        <button type="button" class="pm-view-btn" data-view="month4">4 weeks</button>
+                        <button type="button" class="pm-view-btn" data-view="month">Month</button>
+                    </div>
+                    <button type="button" class="pm-view-btn pm-sunday" id="pm-sunday" title="Show a Sunday band in the week view" aria-pressed="false" hidden>Include Sundays</button>
+                </div>
+                <button type="button" class="fm-nav-btn pm-arrow" id="pm-prev" title="Earlier">&lsaquo;</button>
+                <span class="pm-when-label" id="pm-when-label"></span>
+                <button type="button" class="fm-nav-btn pm-arrow" id="pm-next" title="Later">&rsaquo;</button>
+                <button type="button" class="fm-nav-btn" id="pm-today">Today</button>
+            </div>
+            <div class="fm-header-right">
+                <span class="pm-sub" id="pm-sub"></span>
+                <div class="pm-dept-dropdown" id="pm-dept-dropdown">
+                    <button type="button" class="fm-nav-btn pm-dept-btn" id="pm-dept-btn" aria-haspopup="listbox"><span id="pm-dept-label">All departments</span> &#9662;</button>
+                    <div class="pm-dept-panel">
+                        <div class="pm-dept-actions"><button type="button" class="fm-mini-btn" id="pm-dept-all">Show all</button><button type="button" class="fm-mini-btn" id="pm-dept-none">Show none</button></div>
+                        <ul class="pm-dept-list" id="pm-dept-list"></ul>
+                    </div>
+                </div>
+                <input type="search" id="fm-search" class="fm-search" placeholder="Find a job or cast&hellip;" autocomplete="off">
+                <button type="button" id="fm-shipped-btn" class="fm-nav-btn fm-btn-shipped" title="Castings shipped in the last 60 days">Shipped <span class="fm-area-count" id="fm-shipped-count">0</span></button>
+                <button type="button" id="fm-refresh" class="fm-nav-btn" title="Reload the weekly">Refresh</button>
+                <span id="fm-updated" class="fm-updated"></span>
+            </div>
+        </header>
+
+        <div id="fm-notice" class="fm-notice" hidden></div>
+        <div id="pm-hidden" class="pm-hidden" hidden></div>
+
+        <main class="pm-main" id="pm-map" aria-label="Departments">
+            <!-- department columns are rendered from project-map-config.js -->
+        </main>
+    </div>
+
+    <div class="fm-modal" id="fm-modal" hidden>
+        <div class="fm-modal-box" role="dialog" aria-modal="true" aria-labelledby="fm-modal-title">
+            <div class="fm-modal-head">
+                <span class="fm-modal-title" id="fm-modal-title"></span>
+                <input type="search" id="fm-modal-search" class="fm-modal-search" placeholder="Filter&hellip;" autocomplete="off">
+                <button type="button" class="fm-mini-btn fm-modal-close" id="fm-modal-close">Close</button>
+            </div>
+            <div class="fm-modal-body" id="fm-modal-body"></div>
+        </div>
+    </div>
+
+    <script type="module" src="src/pages/project-map/project-map-page.js?v=20261023-11"></script>
+    <script type="module" src="src/utils/auto-update.js?v=20261023-1"></script>
+</body>
+</html>

@@ -18,10 +18,9 @@ import {
     deleteCastingSchedule, loadScheduleSettings, saveScheduleSetting, isScheduleMigrationPending
 } from '../../services/schedule-service.js?v=20261021-1';
 import {
-    DEPARTMENTS, DEPT_KEYS, TASKS, tasksForDept, taskForPhase, SETTINGS_DEFAULTS, REVENUE_PER_HOUR, SCHEDULABLE_STATUSES, TEAM_DAY_LIMITS, teamOfDepartment, DEFAULT_CREW
-} from '../../config/scheduler-config.js?v=20261023-2';
+    DEPARTMENTS, DEPT_KEYS, TASKS, tasksForDept, taskForPhase, SETTINGS_DEFAULTS, REVENUE_PER_HOUR, SCHEDULABLE_STATUSES, TEAM_DAY_LIMITS
+} from '../../config/scheduler-config.js?v=20261020-5';
 import { logger } from '../../utils/logger.js';
-import { fetchForProject as fetchStagingNotes, fetchForProjects as fetchStagingForProjects, upsertOne as saveStagingNote } from '../../services/task-descriptions-service.js?v=20261022-2';
 
 // ---------------------------------------------------------------------------
 // state
@@ -42,7 +41,6 @@ const S = {
     unsSearch: '',                // the "Not yet scheduled" panel's own search box
     scheduledIds: new Set(),      // every casting with days anywhere on the scheduler (any month)
     ready: new Map(),             // castingId -> flag: "Ready for scheduling" clicked on the portal's Optimizer Hours tab
-    staging: new Map(),           // project_number -> Map("cast|weeklyDept|day" -> { description }) from the portal's Staging tab
     pinned: new Set(),            // castings shown even without rows in the window
     busy: false,
     cascade: false                // moving a task also moves every later task of that casting by the same working days
@@ -122,8 +120,6 @@ async function loadBase() {
         const part = await loadAllCastingPhasesForProject(ids.slice(i, i + 60));
         for (const [k, v] of part) S.phasesByCasting.set(k, v);
     }
-    // the Staging tab's days, task names and hours for every project (the scheduler's primary source since 2026-10-22)
-    try { S.staging = await fetchStagingForProjects(nums); } catch (err) { logger.warn('[scheduler] staging load failed', err); }
     // Only castings with a Casting Inventory are offered for scheduling (user rule 2026-10-19).
     S.withInventory = new Set();
     S.invSummary = new Map();
@@ -161,37 +157,10 @@ async function loadRows() {
 
 // per-casting helpers
 function phasesOf(castingId) { return (S.phasesByCasting.get(castingId) || []).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)); }
-/** The "unit" a scheduled row belongs to: a casting_phases id (previous task list) or 'unit:<cast>|<dept>|<day>' (a staged day). */
-function unitOf(r) { return r.phase_id || (String(r.note || '').startsWith('unit:') ? String(r.note).split(' ')[0] : null); }
-/** A casting's staged days with hours (Staging tab task + Optimizer Hours per day), one unit each, in team order. */
-function stagedUnits(castingId) {
-    const c = S.castingById.get(castingId);
-    const notes = c && S.staging.get(c.project_number);
-    if (!notes) return [];
-    const cells = [];
-    for (const [key, e] of notes) {
-        const [cast, sd, day] = key.split('|');
-        if (cast !== String(c.casting_number)) continue;
-        const team = teamOfDepartment(sd);
-        const hours = Number(e.hours) || 0;
-        if (!team || hours <= 0) continue;
-        cells.push({ key, team, sd, day: parseInt(day, 10) || 1, hours, taskName: String(e.taskName || '').trim() });
-    }
-    if (!cells.length) return [];
-    cells.sort((a, b) => (DEPT_KEYS.indexOf(a.team) - DEPT_KEYS.indexOf(b.team)) || (a.day - b.day));
-    return cells.map(x => {
-        const code = x.taskName ? x.taskName.toUpperCase() : (tasksForDept(x.team)[0] || x.team.toUpperCase());
-        const known = !!x.taskName && (TASKS[code] || []).includes(x.team);
-        return { phase: { id: null, phase_name: `${x.sd} day ${x.day}${x.taskName ? ' · ' + x.taskName.toLowerCase() : ''}`, hours: x.hours }, code, dept: x.team, unmapped: !known, unit: 'unit:' + x.key, staged: true, day: x.day };
-    });
-}
-/** Every unit of work for a casting: the staged days when any carry hours, else the previous task list. */
 function mappedPhases(castingId) {
-    const staged = stagedUnits(castingId);
-    if (staged.length) return staged;
     const list = phasesOf(castingId).filter(p => Number(p.hours) > 0);
     const sealIdx = list.findIndex(p => taskForPhase(p.phase_name).code === 'SEAL');
-    return list.map((p, i) => ({ phase: p, ...taskForPhase(p.phase_name, { afterSeal: sealIdx >= 0 && i > sealIdx }), unit: p.id, staged: false }));
+    return list.map((p, i) => ({ phase: p, ...taskForPhase(p.phase_name, { afterSeal: sealIdx >= 0 && i > sealIdx }) }));
 }
 function rowsOfCasting(castingId) { return S.rows.filter(r => r.casting_id === castingId); }
 function castingLabel(c) { return `Cast ${c.casting_number}`; }
@@ -209,7 +178,7 @@ function lockReport(castingId) {
     const out = [];
     const rows = rowsOfCasting(castingId);
     for (const m of mappedPhases(castingId)) {
-        const sched = rows.filter(r => unitOf(r) === m.unit).reduce((n, r) => n + (Number(r.hours) || 0), 0);
+        const sched = rows.filter(r => r.phase_id === m.phase.id).reduce((n, r) => n + (Number(r.hours) || 0), 0);
         out.push({ phase: m.phase, code: m.code, dept: m.dept, unmapped: m.unmapped, optimizer: Number(m.phase.hours) || 0, scheduled: Math.round(sched * 100) / 100 });
     }
     return out;
@@ -219,108 +188,61 @@ function lockOk(report) { return report.every(r => Math.abs(r.scheduled - r.opti
 // ---------------------------------------------------------------------------
 // spreading (the default schedule from the Optimizer Hours tab)
 // ---------------------------------------------------------------------------
-const teamOfStagingDept = teamOfDepartment;
-/** How many days each team gets for a casting = the day rows on the portal's Staging tab (task_descriptions,
- *  max day_number per department, departments mapped onto the teams). Map team -> days; a team not listed gets 1. */
-async function stagingDaysFor(casting) {
-    const notes = await stagingFor(casting.project_number);
-    const days = new Map();
-    for (const key of notes.keys()) {
-        const [cast, sd, day] = key.split('|');
-        if (cast !== String(casting.casting_number)) continue;
-        const team = teamOfStagingDept(sd);
-        const n = parseInt(day, 10) || 0;
-        if (team && n > (days.get(team) || 0)) days.set(team, n);
+function spreadPhase(m, startIso, dir) {
+    const hours = Number(m.phase.hours) || 0;
+    const perDay = Number((S.settings.dayHours || {})[m.dept]) || 8;
+    const n = Math.max(1, Math.ceil(hours / perDay - 1e-9));
+    const even = Math.round((hours / n) * 100) / 100;
+    const rows = [];
+    let cur = startIso;
+    for (let k = 0; k < n; k++) {
+        const h = k === n - 1 ? Math.round((hours - even * (n - 1)) * 100) / 100 : even;
+        rows.push({ date: cur, hours: h });
+        if (k < n - 1) cur = nextWorking(cur, dir);
     }
-    return days;
-}
-function stagedDaysOf(stage, dept) { return Math.max(1, (stage && stage.get(dept)) || 1); }
-
-/** Split hours over n days in WHOLE hours, the first day(s) carrying the extra (user rule 2026-10-22):
- *  5 h over 3 days = 2, 2, 1 · 26 h over 4 = 7, 7, 6, 6 · 1 h over 2 = 1, 0. A fractional total keeps its fraction on day 1. */
-function evenSplit(hours, n) {
-    if (n <= 1) return [hours];
-    const whole = Math.floor(hours), extra = Math.round((hours - whole) * 100) / 100;
-    const base = Math.floor(whole / n), rem = whole - base * n;
-    const out = Array.from({ length: n }, (_, k) => base + (k < rem ? 1 : 0));
-    out[0] = Math.round((out[0] + extra) * 100) / 100;
-    return out;
+    return { rows, endIso: cur };
 }
 
-/**
- * Build the rows for one casting. anchorIso = cast date (the Cast team's block starts there).
- * Phases are grouped into blocks of consecutive phases of the same team; a block takes as many days as the
- * portal's Staging tab lists for that team, and each phase's Optimizer Hours are split evenly over those days
- * (user rule 2026-10-22). Blocks before Cast run back from the cast date, blocks after it run forward.
- */
-function planCasting(casting, anchorIso, stage) {
+/** Build the rows for one casting. anchorIso = cast date (Cast phase lands there). */
+function planCasting(casting, anchorIso) {
     const mapped = mappedPhases(casting.id);
     if (!mapped.length) return [];
-    const blocks = [];
-    for (const m of mapped) {
-        const last = blocks[blocks.length - 1];
-        if (last && last.dept === m.dept) last.phases.push(m); else blocks.push({ dept: m.dept, phases: [m] });
-    }
-    for (const bl of blocks) { bl.staged = bl.phases.every(m => m.staged); bl.days = bl.staged ? bl.phases.length : Math.max(stagedDaysOf(stage, bl.dept), bl.phases.length); }
-    // previous task list: a team's staged days are shared out between its tasks (one task per day — at least a day
-    // each, the rest by hours), the same way the portal's "Pull hours from the previous task list" does it
-    const allocDays = (bl) => {
-        const total = bl.phases.reduce((n, m) => n + (Number(m.phase.hours) || 0), 0) || 1;
-        const alloc = bl.phases.map(() => 1);
-        for (let left = bl.days - bl.phases.length; left > 0; left--) {
-            let best = 0, bestGap = -Infinity;
-            bl.phases.forEach((m, i) => { const gap = (Number(m.phase.hours) || 0) / total * bl.days - alloc[i]; if (gap > bestGap) { bestGap = gap; best = i; } });
-            alloc[best] += 1;
-        }
-        return alloc;
-    };
+    const castIdx = mapped.findIndex(m => m.code === 'CAST');
     const anchor = workingOrNext(anchorIso);
     const out = [];
-    const push = (m, date, hours) => out.push({
-        project_number: casting.project_number, casting_id: casting.id, phase_id: m.phase.id || null,
-        date, department: m.dept, task: m.code, hours, weekend_ok: false,
-        note: m.phase.id ? (m.unmapped ? `Unmapped phase "${m.phase.phase_name}" — pick the task` : null)
-                         : (m.unmapped ? `${m.unit} Unmapped — pick the task on the Staging tab` : m.unit)
+    const push = (m, r) => out.push({
+        project_number: casting.project_number, casting_id: casting.id, phase_id: m.phase.id,
+        date: r.date, department: m.dept, task: m.code, hours: r.hours, weekend_ok: false,
+        note: m.unmapped ? `Unmapped phase "${m.phase.phase_name}" — pick the task` : null
     });
-    // Build Crate always lands on a Monday (user rule 2026-10-22) — the next Monday that is not a holiday going
-    // forward (the previous one going back); only a manual move puts it elsewhere afterwards
-    const toMonday = (d, dir) => {
-        let x = d;
-        for (let i = 0; i < 40; i++) { if (dow(x) === 1 && !isHoliday(x)) return x; x = addDays(x, dir); }
-        return d;
-    };
-    // lay one block day by day from `start`, going `dir`; a Build Crate day snaps to a Monday; returns the far end date
-    const lay = (bl, start, dir) => {
-        const items = [];   // the block's days in order: { m, hours }
-        if (bl.staged) bl.phases.forEach(m => items.push({ m, hours: Number(m.phase.hours) || 0 }));
-        else { const alloc = allocDays(bl); bl.phases.forEach((m, i) => { for (const h of evenSplit(Number(m.phase.hours) || 0, alloc[i])) if (h > 0) items.push({ m, hours: h }); }); }
-        if (dir < 0) items.reverse();
-        let cur = start;
-        items.forEach((it, idx) => {
-            if (idx > 0) cur = nextWorking(cur, dir);
-            if (it.m.code === 'BUILD' && (idx === 0 || items[idx - 1].m.code !== 'BUILD')) cur = toMonday(cur, dir);
-            push(it.m, cur, it.hours);
-        });
-        return cur;
-    };
-    const castIdx = blocks.findIndex(bl => bl.phases.some(m => m.code === 'CAST'));
     if (castIdx >= 0) {
         let cur = anchor;
-        for (let i = castIdx; i < blocks.length; i++) cur = nextWorking(lay(blocks[i], cur, 1), 1);
+        for (let i = castIdx; i < mapped.length; i++) {
+            const r = spreadPhase(mapped[i], cur, 1);
+            r.rows.forEach(x => push(mapped[i], x));
+            cur = nextWorking(r.endIso, 1);
+        }
         cur = nextWorking(anchor, -1);
-        for (let i = castIdx - 1; i >= 0; i--) cur = nextWorking(lay(blocks[i], cur, -1), -1);
+        for (let i = castIdx - 1; i >= 0; i--) {
+            const r = spreadPhase(mapped[i], cur, -1);
+            r.rows.forEach(x => push(mapped[i], x));
+            cur = nextWorking(r.endIso, -1);
+        }
     } else {
         let cur = anchor;
-        for (const bl of blocks) cur = nextWorking(lay(bl, cur, 1), 1);
+        for (const m of mapped) {
+            const r = spreadPhase(m, cur, 1);
+            r.rows.forEach(x => push(m, x));
+            cur = nextWorking(r.endIso, 1);
+        }
     }
     return out;
 }
 
-async function scheduleCasting(castingId, anchorIso, { replace = false, stage = null } = {}) {
+async function scheduleCasting(castingId, anchorIso, { replace = false } = {}) {
     const c = S.castingById.get(castingId);
     if (!c) return;
-    if (!stage) { try { stage = await stagingDaysFor(c); } catch (_) { stage = new Map(); } }
-    const plan = planCasting(c, anchorIso, stage);
+    const plan = planCasting(c, anchorIso);
     if (!plan.length) { toast('This casting has no Optimizer Hours with hours > 0.', 'error'); return; }
     setBusy(true);
     const __h = await histBegin('schedule ' + castingLabel(c), [castingId]);
@@ -371,10 +293,9 @@ async function shiftCasting(castingId, n) {
 function visibleCastings() {
     const days = new Set(windowDays());
     const q = S.search.trim().toLowerCase();
-    // only castings with days scheduled in this month (user 2026-10-22); what is waiting lives in "Not yet scheduled"
     const withRows = new Set(S.rows.filter(r => days.has(r.date)).map(r => r.casting_id));
     return S.castings.filter(c => {
-        if (!withRows.has(c.id)) return false;
+        if (!withRows.has(c.id) && !S.pinned.has(c.id) && !(c.casting_date && days.has(c.casting_date))) return false;
         if (!q) return true;
         const p = S.projectByNumber.get(c.project_number);
         return c.project_number.toLowerCase().includes(q) || (p && (p.project_name || '').toLowerCase().includes(q));
@@ -625,7 +546,7 @@ function renderGrid() {
                 }
                 const attrs = `data-cid="${c.id}" data-date="${d}" data-dept="${dept}"`;
                 const drag = rows.length ? ' draggable="true" title="Drag to another day on this row to move it; click to edit"' : '';
-                taskTds += `<td class="${cls} sc-trow" ${attrs}${drag}><span class="sc-task">${esc(task)}</span>${crewBadge(rows)}</td>`;
+                taskTds += `<td class="${cls} sc-trow" ${attrs}${drag}><span class="sc-task">${esc(task)}</span></td>`;
                 hourTds += `<td class="${cls} sc-hrow" ${attrs}${drag}><span class="sc-h">${hrs}</span></td>`;
             });
         }
@@ -688,17 +609,17 @@ function openEditor(td) {
     const weekendAllowed = rows.some(r => r.weekend_ok);
     const opts = tasksForDept(dept);
     const phaseLine = (r) => {
-        if (!unitOf(r)) return '<div class="sc-ed-phase">typed by hand — not tied to the Optimizer Hours</div>';
-        const ph = (mappedPhases(cid).find(m => m.unit === unitOf(r)) || {}).phase;
-        const all = S.rows.filter(x => unitOf(x) === unitOf(r));
+        if (!r.phase_id) return '<div class="sc-ed-phase">typed by hand — not tied to the Optimizer Hours</div>';
+        const ph = phasesOf(cid).find(p => p.id === r.phase_id);
+        const all = S.rows.filter(x => x.phase_id === r.phase_id);
         const tot = all.reduce((n, x) => n + (Number(x.hours) || 0), 0);
         return `<div class="sc-ed-phase">Optimizer Hours: ${esc(ph?.phase_name || '?')} ${fmtH(ph?.hours)} h over ${all.length} day${all.length === 1 ? '' : 's'} (scheduled ${fmtH(tot)} h). Hours come from the portal and can't be changed here — use Roll over to split them with the next day.</div>`;
     };
     // roll-over: split this day's hours with the next working day (the pair always totals what it had)
     const rollPanel = (r) => {
-        if (!unitOf(r)) return '';
+        if (!r.phase_id) return '';
         const next = nextWorking(r.date, 1);
-        const nextRow = S.rows.find(x => unitOf(x) === unitOf(r) && x.date === next && x.department === r.department);
+        const nextRow = S.rows.find(x => x.phase_id === r.phase_id && x.date === next && x.department === r.department);
         const total = Math.round(((Number(r.hours) || 0) + (nextRow ? Number(nextRow.hours) || 0 : 0)) * 100) / 100;
         const todayH = nextRow ? Number(r.hours) || 0 : Math.round(total / 2 * 2) / 2;
         return `<div class="sc-roll" data-roll="${r.id}" data-total="${total}" data-next="${next}" hidden>
@@ -708,122 +629,26 @@ function openEditor(td) {
             <button type="button" class="btn-primary" data-roll-save>Save roll-over</button>
         </div>`;
     };
-    let html = `<h4>${rows.length ? 'Task mover' : 'Add a day'}</h4><div class="sc-sub">${esc(projectLabel(c.project_number))} — ${esc(castingLabel(c))} · ${esc(shortDay(date))} · ${esc(DEPARTMENTS.find(d => d.key === dept)?.label || dept)}</div>`;
+    let html = `<h4>${esc(projectLabel(c.project_number))} — ${esc(castingLabel(c))}</h4><div class="sc-sub">${esc(shortDay(date))} · ${esc(DEPARTMENTS.find(d => d.key === dept)?.label || dept)}</div>`;
     if (holiday) html += '<div class="sc-ed-alert">Holiday — nothing can be scheduled on this day. Change the holiday list in Settings if that is wrong.</div>';
     else if (weekend && !weekendAllowed) html += `<div class="sc-ed-alert">Weekend. Work is only scheduled here if someone allows it.<br><button type="button" class="btn-secondary" id="sc-ed-allow">Allow this weekend day for this casting</button></div>`;
     for (const r of rows) {
-        const lockedH = unitOf(r) ? ' readonly class="sc-ed-locked" title="Locked to the Optimizer Hours tab in the portal"' : '';
-        const rollBtn = unitOf(r) && !holiday ? `<button type="button" class="btn-secondary sc-roll-open" data-roll-open="${r.id}" title="The task did not finish today: carry part of its hours to the next working day">Roll over to next day &#9656;</button>` : '';
+        const lockedH = r.phase_id ? ' readonly class="sc-ed-locked" title="Locked to the Optimizer Hours tab in the portal"' : '';
+        const rollBtn = r.phase_id && !holiday ? `<button type="button" class="btn-secondary sc-roll-open" data-roll-open="${r.id}" title="The task did not finish today: carry part of its hours to the next working day">Roll over to next day &#9656;</button>` : '';
         html += `<div class="sc-ed-row" data-id="${r.id}"><select data-task>${opts.map(o => `<option${o === r.task ? ' selected' : ''}>${o}</option>`).join('')}${opts.includes(r.task) ? '' : `<option selected>${esc(r.task)}</option>`}</select><input type="number" step="0.5" min="0" data-hours value="${fmtH(r.hours)}"${lockedH}><button type="button" class="sc-del" data-del title="Remove">&times;</button>${phaseLine(r)}${rollBtn}${rollPanel(r)}</div>`;
     }
     const canEdit = !holiday && (!weekend || weekendAllowed);
-    if (canEdit && !rows.length) html += addFormHtml(cid, dept, date);   // adding a day = click an empty cell
+    if (canEdit) html += addFormHtml(cid, dept, date);
     if (rows.length) {
         const nLater = S.rows.filter(r => r.casting_id === cid && r.date > date).length;
         html += `<div class="sc-ed-move">Move these to <input type="date" id="sc-ed-move-date" value="${date}"><button type="button" class="btn-secondary" id="sc-ed-move">Move</button></div>`;
         html += `<label class="sc-ed-cascade"><input type="checkbox" id="sc-ed-cascade"${S.cascade ? ' checked' : ''}${nLater ? '' : ' disabled'}> Cascade: also move every task after this one (${nLater}) by the same number of working days</label>`;
     }
-    if (rows.length) html += crewSectionHtml(dept, rows);
-    if (rows.length) html += `<div class="sc-stg" id="sc-stg"><div class="sc-stg-title">Staging note</div><div class="sc-hint">Loading the portal's staging note…</div></div>`;
     html += `<div class="sc-ed-actions"><button type="button" class="btn-secondary" id="sc-ed-cancel">Close</button><div class="right">${canEdit && rows.length ? '<button type="button" class="btn-primary" id="sc-ed-save">Save</button>' : ''}</div></div>`;
     ed.innerHTML = html;
     ed.hidden = false;
     refreshAddForm();
     placeEditor(td);
-    if (rows.length) fillStagingSection(cid, dept, date, td);
-}
-
-// ---- crew: who works this day (plant_schedule.crew, migration/plant-schedule-crew.sql)
-function crewSectionHtml(dept, rows) {
-    const c = crewOf(dept);
-    const picked = new Set(rows.flatMap(r => Array.isArray(r.crew) ? r.crew : []));
-    const team = [...(c.leader ? [c.leader] : []), ...c.people.filter(p => p !== c.leader)];
-    const others = everyone().filter(n => !team.includes(n));
-    const box = (name, isLead) => `<label class="sc-crew-pick${picked.has(name) ? ' on' : ''}"><input type="checkbox" data-crew-name="${esc(name)}"${picked.has(name) ? ' checked' : ''}> ${esc(name)}${isLead ? ' <small>(leader)</small>' : ''}</label>`;
-    const extra = [...picked].filter(n => !team.includes(n));
-    return `<div class="sc-crew" id="sc-crew-sec"><div class="sc-stg-title">Crew <small>(${esc(deptLabel(dept))} team)</small></div>
-        <div class="sc-crew-picks">${team.map(n => box(n, n === c.leader)).join('')}${extra.map(n => box(n, false)).join('')}</div>
-        <div class="sc-crew-add">Borrow: <select id="sc-crew-borrow"><option value="">— someone from another team —</option>${others.filter(n => !picked.has(n)).map(n => `<option>${esc(n)}</option>`).join('')}</select></div>
-        <div class="sc-hint">Ticks save straight away and show as initials on the day.</div></div>`;
-}
-async function saveCrewFromEditor() {
-    if (!editorCtx) return;
-    const sec = $('sc-crew-sec'); if (!sec) return;
-    const names = [...sec.querySelectorAll('input[data-crew-name]:checked')].map(i => i.dataset.crewName);
-    const rows = S.rows.filter(r => r.casting_id === editorCtx.cid && r.date === editorCtx.date && r.department === editorCtx.dept);
-    try {
-        for (const r of rows) { await updateScheduleRow(r.id, { crew: names }); r.crew = names; }
-        render();
-        const td = document.querySelector(`tr.sc-cast-top td.sc-cell[data-cid="${editorCtx.cid}"][data-date="${editorCtx.date}"][data-dept="${editorCtx.dept}"]`);
-        if (td) openEditor(td);
-    } catch (err) {
-        toast(/crew/.test(String(err.message || '')) ? 'The crew column is not in the database yet — run migration/plant-schedule-crew.sql first.' : 'Could not save the crew: ' + (err.message || err), 'error');
-    }
-}
-function crewBadge(rows) {
-    const names = [...new Set(rows.flatMap(r => Array.isArray(r.crew) ? r.crew : []))];
-    if (!names.length) return '';
-    const txt = names.length <= 2 ? names.map(n => n.slice(0, 2)).join('') : names.length;
-    return `<span class="sc-crew-badge" title="${esc(names.join(', '))}">${esc(String(txt))}</span>`;
-}
-
-// ---- staging note (the portal's Staging tab, task_descriptions): casting + weekly department + the day's index in that team
-const weeklyDeptOf = (dept) => DEPARTMENTS.find(d => d.key === dept)?.weekly || dept;
-async function stagingFor(projectNumber) {
-    if (!S.staging.has(projectNumber)) S.staging.set(projectNumber, await fetchStagingNotes(projectNumber));
-    return S.staging.get(projectNumber);
-}
-/** This date's day number among the casting's scheduled days in that team (1 = first), over all months. */
-async function stagingDayOf(cid, dept, date) {
-    const all = S.pinned.has(cid) ? S.rows.filter(r => r.casting_id === cid) : await loadScheduleForCastings([cid]);
-    const dates = [...new Set(all.filter(r => r.department === dept).map(r => r.date))].sort();
-    const i = dates.indexOf(date);
-    return i < 0 ? null : i + 1;
-}
-async function fillStagingSection(cid, dept, date, td) {
-    const box = $('sc-stg');
-    if (!box || !editorCtx || editorCtx.cid !== cid || editorCtx.date !== date || editorCtx.dept !== dept) return;
-    const c = S.castingById.get(cid);
-    try {
-        const [notes, dayIdx] = await Promise.all([stagingFor(c.project_number), stagingDayOf(cid, dept, date)]);
-        if (!$('sc-stg') || !editorCtx || editorCtx.cid !== cid || editorCtx.date !== date) return;
-        let day = dayIdx;
-        let wd = weeklyDeptOf(dept);
-        let key = `${c.casting_number}|${wd}|${day}`;
-        const r0 = S.rows.find(r => r.casting_id === cid && r.date === date && r.department === dept);
-        const u0 = r0 && unitOf(r0);
-        if (u0 && u0.startsWith('unit:')) { key = u0.slice(5); const parts = key.split('|'); wd = parts[1]; day = parts[2]; }
-        if (!notes.has(key)) {   // the Staging tab may have used another spelling for this team ("FormOut", "Mill", "Load" …)
-            const alt = [...notes.keys()].find(k => { const [cast, sd, d] = k.split('|'); return cast === String(c.casting_number) && String(d) === String(day) && teamOfStagingDept(sd) === dept; });
-            if (alt) { key = alt; wd = alt.split('|')[1]; }
-        }
-        const cur = (notes.get(key) || {}).description || '';
-        const where = `${esc(wd)} day ${day} of ${esc(castLabelShort(c))}`;
-        box.innerHTML = `<div class="sc-stg-title">Staging note <small>(${where})</small></div>
-            ${cur.trim() ? `<div class="sc-stg-cur">${esc(cur)}</div>` : `<div class="sc-ed-alert">&#9888; No staging note in the portal for ${where}.</div>`}
-            <textarea id="sc-stg-text" rows="3" placeholder="Type the updated staging note…" data-key="${esc(key)}" data-day="${day}" data-wd="${esc(wd)}">${esc(cur)}</textarea>
-            <div class="sc-stg-actions"><button type="button" class="btn-primary" id="sc-stg-save">Save staging note</button><span class="sc-hint">Saves to the portal's Staging tab and the weekly card.</span></div>`;
-        placeEditor(td);
-    } catch (err) {
-        box.innerHTML = `<div class="sc-stg-title">Staging note</div><div class="sc-ed-alert">Could not load the staging note: ${esc(err.message || err)}</div>`;
-    }
-}
-function castLabelShort(c) { return `Cast ${c.casting_number}`; }
-async function saveStagingFromEditor() {
-    const ta = $('sc-stg-text');
-    if (!ta || !editorCtx) return;
-    const c = S.castingById.get(editorCtx.cid);
-    const text = ta.value;
-    setBusy(true);
-    try {
-        await saveStagingNote({ projectNumber: c.project_number, castingNumber: c.casting_number, department: ta.dataset.wd, dayNumber: ta.dataset.day, description: text });
-        const m = await stagingFor(c.project_number);
-        m.set(ta.dataset.key, { ...(m.get(ta.dataset.key) || {}), description: text });
-        toast(text.trim() ? `Staging note saved for ${ta.dataset.wd} day ${ta.dataset.day} of ${castLabelShort(c)}` : 'Staging note cleared');
-        const td = document.querySelector(`tr.sc-cast-top td.sc-cell[data-cid="${editorCtx.cid}"][data-date="${editorCtx.date}"][data-dept="${editorCtx.dept}"]`);
-        if (td) openEditor(td);
-    } catch (err) { toast('Could not save the staging note: ' + (err.message || err), 'error'); }
-    finally { setBusy(false); }
 }
 
 function placeEditor(anchorEl) {
@@ -842,7 +667,7 @@ function closeEditor() { $('sc-editor').hidden = true; editorCtx = null; }
 async function changePhaseDayHours(row, newHours) {
     const delta = Math.round((newHours - (Number(row.hours) || 0)) * 100) / 100;
     if (!delta) return null;
-    const others = S.rows.filter(x => unitOf(x) === unitOf(row) && x.id !== row.id).sort((a, b) => b.date.localeCompare(a.date));
+    const others = S.rows.filter(x => x.phase_id === row.phase_id && x.id !== row.id).sort((a, b) => b.date.localeCompare(a.date));
     if (!others.length) return 'This phase has only this one day, so its hours are locked to the Optimizer Hours tab. Add another day for the phase first, or change the hours on the Optimizer Hours tab.';
     if (delta > 0) {
         // take hours away from the other days, latest first
@@ -876,7 +701,7 @@ async function saveEditor() {
             const task = line.querySelector('[data-task]').value;
             const hours = Math.max(0, Number(line.querySelector('[data-hours]').value) || 0);
             if (task !== row.task) await updateScheduleRow(row.id, { task, note: /Unmapped/.test(row.note || '') ? null : row.note });
-            if (!unitOf(row) && Math.abs(hours - (Number(row.hours) || 0)) > 0.001) {   // portal hours are never edited here
+            if (!row.phase_id && Math.abs(hours - (Number(row.hours) || 0)) > 0.001) {   // portal hours are never edited here
                 if (hours <= 0) await deleteScheduleRow(row.id);
                 else await updateScheduleRow(row.id, { hours });
             }
@@ -892,9 +717,9 @@ async function saveEditor() {
 /** Split a phase day with the next working day: today keeps todayH, the next day gets the rest of the pair's hours. */
 async function saveRollover(rowId, todayH) {
     const row = S.rows.find(r => r.id === rowId);
-    if (!row || !unitOf(row)) return;
+    if (!row || !row.phase_id) return;
     const next = nextWorking(row.date, 1);
-    const nextRow = S.rows.find(x => unitOf(x) === unitOf(row) && x.date === next && x.department === row.department);
+    const nextRow = S.rows.find(x => x.phase_id === row.phase_id && x.date === next && x.department === row.department);
     const total = Math.round(((Number(row.hours) || 0) + (nextRow ? Number(nextRow.hours) || 0 : 0)) * 100) / 100;
     todayH = Math.round((Number(todayH) || 0) * 100) / 100;
     const nextH = Math.round((total - todayH) * 100) / 100;
@@ -908,7 +733,7 @@ async function saveRollover(rowId, todayH) {
     try {
         await updateScheduleRow(row.id, { hours: todayH });
         if (nextRow) await updateScheduleRow(nextRow.id, { hours: nextH });
-        else await insertScheduleRows([{ project_number: row.project_number, casting_id: row.casting_id, phase_id: row.phase_id, date: next, department: row.department, task: row.task, hours: nextH, weekend_ok: false, note: row.phase_id ? `Rolled over from ${shortDay(row.date)}` : row.note, crew: Array.isArray(row.crew) ? row.crew : null }]);
+        else await insertScheduleRows([{ project_number: row.project_number, casting_id: row.casting_id, phase_id: row.phase_id, date: next, department: row.department, task: row.task, hours: nextH, weekend_ok: false, note: `Rolled over from ${shortDay(row.date)}` }]);
         await histEnd(__h);
         await loadRows();
         render();
@@ -927,8 +752,8 @@ function addFormHtml(cid, dept, date) {
     const list = addablePhases(cid, dept);
     if (!list.length) return `<div class="sc-ed-add-none">This casting has no ${esc(deptLabel(dept))} task on the Optimizer Hours tab, so there is nothing to add here. Hours only come from the portal.</div>`;
     const opt = (m) => {
-        const days = S.rows.filter(r => unitOf(r) === m.unit).length;
-        return `<option value="${esc(m.unit)}">${esc(String(m.code).toLowerCase())} — ${esc(m.phase.phase_name)} (${fmtH(m.phase.hours)} h${days ? `, on ${days} day${days === 1 ? '' : 's'}` : ', not scheduled yet'})</option>`;
+        const days = S.rows.filter(r => r.phase_id === m.phase.id).length;
+        return `<option value="${m.phase.id}">${esc(String(m.code).toLowerCase())} — ${esc(m.phase.phase_name)} (${fmtH(m.phase.hours)} h${days ? `, on ${days} day${days === 1 ? '' : 's'}` : ', not scheduled yet'})</option>`;
     };
     return `<div class="sc-ed-add-wrap"><div class="sc-ed-add-title">Add a day for</div>
         <div class="sc-ed-add"><select id="sc-ed-add-phase">${list.map(opt).join('')}</select><input type="number" id="sc-ed-add-hours" step="0.5" min="0" placeholder="h"><button type="button" class="btn-secondary" id="sc-ed-add">Add</button></div>
@@ -938,10 +763,10 @@ function addFormHtml(cid, dept, date) {
 function refreshAddForm() {
     const sel = $('sc-ed-add-phase'), hin = $('sc-ed-add-hours'), note = $('sc-ed-add-note');
     if (!sel || !hin || !note) return;
-    const m = mappedPhases(editorCtx.cid).find(x => x.unit === sel.value);
+    const m = mappedPhases(editorCtx.cid).find(x => x.phase.id === sel.value);
     if (!m) return;
     const total = Number(m.phase.hours) || 0;
-    const days = S.rows.filter(r => unitOf(r) === m.unit);
+    const days = S.rows.filter(r => r.phase_id === m.phase.id);
     if (!days.length) {
         hin.value = fmtH(total); hin.readOnly = true;
         note.textContent = `Not scheduled yet: this day gets all ${fmtH(total)} h from the Optimizer Hours tab.`;
@@ -957,10 +782,10 @@ async function addEditorEntry() {
     const sel = $('sc-ed-add-phase');
     if (!sel) return;
     const cid = editorCtx.cid, date = editorCtx.date, dept = editorCtx.dept;
-    const m = mappedPhases(cid).find(x => x.unit === sel.value);
+    const m = mappedPhases(cid).find(x => x.phase.id === sel.value);
     if (!m) { toast('Pick a task first.', 'error'); return; }
     const total = Math.round((Number(m.phase.hours) || 0) * 100) / 100;
-    const days = S.rows.filter(r => unitOf(r) === m.unit);
+    const days = S.rows.filter(r => r.phase_id === m.phase.id);
     if (days.some(r => r.date === date && r.department === dept)) { toast('This task is already on this day — use Roll over or Move instead.', 'error'); return; }
     let hours = days.length ? Math.round((Number($('sc-ed-add-hours').value) || 0) * 100) / 100 : total;
     if (days.length && (hours <= 0 || hours >= total)) { toast(`Enter between 0 and ${fmtH(total)} h — the other day${days.length === 1 ? '' : 's'} must keep some hours.`, 'error'); return; }
@@ -983,7 +808,7 @@ async function addEditorEntry() {
     const __h = await histBegin(`add ${String(m.code).toLowerCase()} on ${shortDay(date)}`, [cid]);
     try {
         for (const x of plan) await updateScheduleRow(x.row.id, { hours: x.hours });
-        await insertScheduleRows([{ project_number: c.project_number, casting_id: c.id, phase_id: m.phase.id || null, date, department: dept, task: m.code, hours, weekend_ok: weekend, note: m.phase.id ? null : m.unit }]);
+        await insertScheduleRows([{ project_number: c.project_number, casting_id: c.id, phase_id: m.phase.id, date, department: dept, task: m.code, hours, weekend_ok: weekend, note: null }]);
         S.pinned.add(c.id);
         await histEnd(__h);
         await loadRows();
@@ -1173,15 +998,15 @@ function wireDrag(wrap) {
 async function deleteEditorEntry(id) {
     const row = S.rows.find(r => r.id === id);
     if (!row) return;
-    if (unitOf(row)) {
-        const others = S.rows.filter(x => unitOf(x) === unitOf(row) && x.id !== id).sort((a, b) => b.date.localeCompare(a.date));
+    if (row.phase_id) {
+        const others = S.rows.filter(x => x.phase_id === row.phase_id && x.id !== id).sort((a, b) => b.date.localeCompare(a.date));
         if (!others.length) { toast('This is the phase\'s only day — its hours are locked to the Optimizer Hours tab. Move it instead, or remove the whole casting from the row menu.', 'error'); return; }
         if (!window.confirm(`Remove this day? Its ${fmtH(row.hours)} h move to the phase's last other day so the Optimizer Hours total stays locked.`)) return;
     }
     setBusy(true);
     const __h = await histBegin('remove day', [editorCtx.cid]);
     try {
-        if (unitOf(row)) { const err = await changePhaseDayHours(row, 0); if (err) { toast(err, 'error'); return; } }
+        if (row.phase_id) { const err = await changePhaseDayHours(row, 0); if (err) { toast(err, 'error'); return; } }
         else await deleteScheduleRow(id);
         await histEnd(__h);
         await loadRows();
@@ -1267,10 +1092,10 @@ function confirmOverload(list) {
     return window.confirm(`This will OVER-SCHEDULE ${list.length} team-day${list.length === 1 ? '' : 's'}:\n\n${lines}\n\nParts, FO, Cast and DM take 1 casting a day; F, Seal and Spec take 5.\n\nOK = over-schedule anyway.   Cancel = go back.`);
 }
 /** First working day on/after `from` where the whole casting fits without putting any team over its limit. */
-function nextFreeCastDay(c, load, from, stage) {
+function nextFreeCastDay(c, load, from) {
     let d = workingOrNext(from);
     for (let i = 0; i < 400; i++) {
-        if (!overloadsOf(planCasting(c, d, stage), load).length) return d;
+        if (!overloadsOf(planCasting(c, d), load).length) return d;
         d = nextWorking(d, 1);
     }
     return workingOrNext(from);
@@ -1280,25 +1105,18 @@ async function openScheduleDialog(castingId, { replace = false } = {}) {
     const c = S.castingById.get(castingId);
     if (!c) return;
     setBusy(true);
-    let load, stage;
-    try { [load, stage] = await Promise.all([loadTeamLoad(addDays(todayIso(), -90), addDays(todayIso(), 400), castingId), stagingDaysFor(c)]); }
+    let load;
+    try { load = await loadTeamLoad(addDays(todayIso(), -90), addDays(todayIso(), 400), castingId); }
     catch (err) { toast('Could not read the grid: ' + (err.message || err), 'error'); setBusy(false); return; }
     finally { setBusy(false); }
-    const next = nextFreeCastDay(c, load, todayIso(), stage);
-    schedCtx = { cid: castingId, replace, load, next, stage };
-    // what the Staging tab says: days per team for this casting
-    const units = mappedPhases(castingId);
-    const teamsUsed = [...new Set(units.map(m => m.dept))];
-    const fromStaged = units.length && units[0].staged;
-    const stagedLine = teamsUsed.map(d => `${deptLabel(d)} ${fromStaged ? units.filter(m => m.dept === d).length : stagedDaysOf(stage, d)}`).join(' · ');
-    const noStaging = fromStaged ? [] : teamsUsed.filter(d => !stage.get(d));
+    const next = nextFreeCastDay(c, load, todayIso());
+    schedCtx = { cid: castingId, replace, load, next };
     const own = c.casting_date || '';
     const box = $('sc-sched');
     box.innerHTML = `<div class="sc-panel sc-panel-sm" role="dialog" aria-modal="true">
         <div class="sc-panel-head"><h2>${replace ? 'Regenerate' : 'Schedule'} ${esc(castingLabel(c))} — ${esc(projectLabel(c.project_number))}</h2><button type="button" class="sc-x" data-close>&times;</button></div>
         <div class="sc-panel-body">
             <p class="sc-hint">Would you like to schedule on the next available cast day, or choose a cast day? Cast date on the job: ${own ? esc(shortDay(own)) + ' (Castings tab)' : 'none on the Castings tab'}.</p>
-            <p class="sc-hint"><strong>Days per team from the Staging tab:</strong> ${esc(stagedLine)}.${noStaging.length ? ` <span class="sc-stg-warn">&#9888; No staging days for ${esc(noStaging.map(deptLabel).join(', '))} — those get 1 day each.</span>` : ''} ${fromStaged ? 'Each day carries the hours entered on the Optimizer Hours tab.' : 'This casting still uses its previous task list: each team\'s hours are split over its days.'}</p>
             <label class="sc-choice"><input type="radio" name="sc-cast-mode" value="next" checked> <strong>Next available cast day:</strong> ${esc(shortDay(next))} <small class="sc-hint">(no team over its limit)</small></label>
             <label class="sc-choice"><input type="radio" name="sc-cast-mode" value="pick"> <strong>Choose a cast day:</strong> <input type="date" id="sc-cast-pick" value="${esc(own || next)}"></label>
             <div id="sc-cast-note" class="sc-hint"></div>
@@ -1314,7 +1132,7 @@ async function openScheduleDialog(castingId, { replace = false } = {}) {
         note.classList.remove('sc-note-warn');
         if (!d) { note.textContent = ''; return; }
         if (isHoliday(d)) { note.textContent = `${shortDay(d)} is a holiday — nothing is scheduled on holidays.`; note.classList.add('sc-note-warn'); return; }
-        const over = overloadsOf(planCasting(c, d, stage), load);
+        const over = overloadsOf(planCasting(c, d), load);
         if (over.length) {
             note.classList.add('sc-note-warn');
             note.innerHTML = `&#9888; This over-schedules ${over.length} team-day${over.length === 1 ? '' : 's'}: ` + esc(overloadLines(over.slice(0, 4)).join('; ')) + (over.length > 4 ? '; …' : '') + '. You will be asked to confirm.';
@@ -1336,33 +1154,31 @@ async function confirmScheduleDialog() {
     if (!d) { toast('Pick a cast day first.', 'error'); return; }
     if (isHoliday(d)) { toast(`${shortDay(d)} is a holiday.`, 'error'); return; }
     const c = S.castingById.get(schedCtx.cid);
-    if (!confirmOverload(overloadsOf(planCasting(c, d, schedCtx.stage), schedCtx.load))) return;
+    if (!confirmOverload(overloadsOf(planCasting(c, d), schedCtx.load))) return;
     const ctx = schedCtx;
     box.hidden = true; schedCtx = null;
-    await scheduleCasting(ctx.cid, d, { replace: ctx.replace, stage: ctx.stage });
+    await scheduleCasting(ctx.cid, d, { replace: ctx.replace });
 }
 
 // ---------------------------------------------------------------------------
 // settings
 // ---------------------------------------------------------------------------
-function crewOf(team) { const c = (S.settings.crew || {})[team] || {}; return { leader: String(c.leader || '').trim(), people: (c.people || []).map(s => String(s).trim()).filter(Boolean) }; }
-function everyone() { const s = new Set(); for (const k of DEPT_KEYS) { const c = crewOf(k); if (c.leader) s.add(c.leader); c.people.forEach(p => s.add(p)); } return [...s].sort(); }
 function openSettings() {
+    const box = $('sc-dayhours');
+    box.innerHTML = DEPARTMENTS.map(d => `<label>${d.label}<input type="number" min="1" step="1" data-dept="${d.key}" value="${Number((S.settings.dayHours || {})[d.key]) || 8}"></label>`).join('');
     $('sc-holidays').value = (S.settings.holidays || []).join('\n');
-    const box = $('sc-crew');
-    if (box) box.innerHTML = DEPARTMENTS.map(d => { const c = crewOf(d.key); return `<div class="sc-crew-row"><span class="sc-crew-team">${d.label}</span><input data-crew-leader="${d.key}" value="${esc(c.leader)}" placeholder="leader"><input data-crew-people="${d.key}" value="${esc(c.people.join(', '))}" placeholder="people, comma separated"></div>`; }).join('');
     $('sc-settings').hidden = false;
 }
 async function saveSettings() {
+    const dayHours = {};
+    for (const inp of $('sc-dayhours').querySelectorAll('input')) dayHours[inp.dataset.dept] = Math.max(1, Number(inp.value) || 8);
     const holidays = $('sc-holidays').value.split(/\r?\n/).map(s => s.trim()).filter(s => /^\d{4}-\d{2}-\d{2}$/.test(s)).sort();
-    const crew = {};
-    for (const d of DEPT_KEYS) crew[d] = { leader: ($('sc-crew').querySelector(`[data-crew-leader="${d}"]`)?.value || '').trim(), people: ($('sc-crew').querySelector(`[data-crew-people="${d}"]`)?.value || '').split(',').map(s => s.trim()).filter(Boolean) };
     setBusy(true);
     try {
+        await saveScheduleSetting('dayHours', dayHours);
         await saveScheduleSetting('holidays', holidays);
-        await saveScheduleSetting('crew', crew);
+        S.settings.dayHours = dayHours;
         S.settings.holidays = holidays;
-        S.settings.crew = crew;
         $('sc-settings').hidden = true;
         render();
         toast('Settings saved for everyone.');
@@ -1454,15 +1270,6 @@ function wire() {
     $('sc-cascade').addEventListener('change', (e) => setCascade(e.target.checked));
     $('sc-editor').addEventListener('change', (e) => { if (e.target.id === 'sc-ed-cascade') setCascade(e.target.checked); });
     $('sc-editor').addEventListener('change', (e) => { if (e.target.id === 'sc-ed-add-phase') { const h = $('sc-ed-add-hours'); if (h) delete h.dataset.touched; refreshAddForm(); } });
-    $('sc-editor').addEventListener('change', async (e) => {
-        if (S.busy) return;
-        if (e.target.matches('input[data-crew-name]')) { await saveCrewFromEditor(); return; }
-        if (e.target.id === 'sc-crew-borrow' && e.target.value) {
-            const sec = $('sc-crew-sec'); const name = e.target.value;
-            sec.querySelector('.sc-crew-picks').insertAdjacentHTML('beforeend', `<label class="sc-crew-pick on"><input type="checkbox" data-crew-name="${esc(name)}" checked> ${esc(name)}</label>`);
-            await saveCrewFromEditor();
-        }
-    });
     $('sc-editor').addEventListener('input', (e) => {
         if (e.target.id === 'sc-ed-add-hours') e.target.dataset.touched = '1';
         const panel = e.target.closest('.sc-roll');
@@ -1509,7 +1316,6 @@ function wire() {
         if (t.id === 'sc-ed-save') { await saveEditor(); return; }
         if (t.id === 'sc-ed-add') { await addEditorEntry(); return; }
         if (t.id === 'sc-ed-allow') { await allowWeekendHere(); return; }
-        if (t.id === 'sc-stg-save') { await saveStagingFromEditor(); return; }
         const ro = t.closest('[data-roll-open]');
         if (ro) { const pnl = $('sc-editor').querySelector(`.sc-roll[data-roll="${ro.dataset.rollOpen}"]`); if (pnl) { pnl.hidden = !pnl.hidden; placeEditor(document.querySelector(`td.sc-cell[data-cid="${editorCtx.cid}"][data-date="${editorCtx.date}"][data-dept="${editorCtx.dept}"]`) || ro); } return; }
         if (t.closest('[data-roll-save]')) { const pnl = t.closest('.sc-roll'); await saveRollover(pnl.dataset.roll, pnl.querySelector('[data-roll-today]').value); return; }
@@ -1550,12 +1356,11 @@ function wire() {
         if (tables.has('casting_phases') || tables.has('project_castings') || tables.has('projects') || tables.has('casting_inventory')) {
             try { await loadBase(); } catch (err) { logger.warn('[scheduler] reload base failed', err); }
         }
-        if (tables.has('task_descriptions')) { try { S.staging = await fetchStagingForProjects(S.projects.map(p => p.project_number)); } catch (err) { logger.warn('[scheduler] staging reload failed', err); } }
         if (tables.has('plant_schedule_settings')) {
             try { const saved = await loadScheduleSettings(); S.ready = readyFromSettings(saved); if (Number(saved.target) > 0) S.settings.target = Number(saved.target); if (saved.costs) S.settings.costs = saved.costs; }
             catch (err) { logger.warn('[scheduler] reload settings failed', err); }
         }
-        if (tables.has('plant_schedule') || tables.has('plant_schedule_settings') || tables.has('casting_phases') || tables.has('project_castings') || tables.has('task_descriptions')) {
+        if (tables.has('plant_schedule') || tables.has('plant_schedule_settings') || tables.has('casting_phases') || tables.has('project_castings')) {
             if (!editorCtx) { try { await loadRows(); render(); toast('Updated by someone else — reloaded', 'info'); } catch (err) { logger.warn('[scheduler] reload rows failed', err); } }
         }
     });
@@ -1576,9 +1381,9 @@ async function init() {
     try {
         await initializeSupabase();
         const saved = await loadScheduleSettings();
+        if (saved.dayHours) S.settings.dayHours = { ...SETTINGS_DEFAULTS.dayHours, ...saved.dayHours };
         if (Array.isArray(saved.holidays)) S.settings.holidays = saved.holidays;
         if (saved.costs && typeof saved.costs === 'object') S.settings.costs = saved.costs;
-        S.settings.crew = (saved.crew && typeof saved.crew === 'object') ? saved.crew : JSON.parse(JSON.stringify(DEFAULT_CREW));
         if (Number(saved.target) > 0) S.settings.target = Number(saved.target);
         S.ready = readyFromSettings(saved);
         await loadBase();
@@ -1591,6 +1396,6 @@ async function init() {
 }
 
 // debugging hooks (read-only use from the console)
-window.__scheduler = { S, planCasting, stagingDaysFor, lockReport, mappedPhases, nextWorking, undo, redo, HIST };
+window.__scheduler = { S, planCasting, lockReport, mappedPhases, nextWorking, undo, redo, HIST };
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
