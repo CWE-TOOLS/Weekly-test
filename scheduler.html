@@ -49,6 +49,9 @@
       'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
     bar.innerHTML = '<span>TEST SITE — READ-ONLY. Only the Plant Scheduler&#39;s own tables and job 0860 casting "Test" save for real; nothing here touches the live portal, the Optimizer or the weekly.</span>' + '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
     document.body.appendChild(bar);
+    var st = document.createElement('style');   // keep the banner off the page's bottom edge (scheduler scrollbar, floating boxes)
+    st.textContent = '#sc-app{height:calc(100vh - ' + bar.offsetHeight + 'px) !important}body{padding-bottom:' + bar.offsetHeight + 'px}';
+    document.head.appendChild(st);
   });
 })();
 </script>
@@ -60,7 +63,7 @@
     <link rel="stylesheet" href="src/styles/variables.css">
     <link rel="stylesheet" href="src/styles/base.css">
     <link rel="stylesheet" href="src/styles/buttons.css">
-    <link rel="stylesheet" href="src/styles/scheduler.css?v=20261027-1">
+    <link rel="stylesheet" href="src/styles/scheduler.css?v=20261027-2">
 </head>
 <body>
 <div id="sc-app">
