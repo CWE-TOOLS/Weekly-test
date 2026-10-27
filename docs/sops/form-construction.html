@@ -20,10 +20,8 @@
   function isWrite(url, method, body) {
     method = (method || 'GET').toUpperCase();
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
-    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
     if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;
     if (/\/rest\/v1\/task_descriptions/i.test(url) && /0860/.test(url + ' ' + String(body || '')) && /casting_number(=eq\.|":")Test/.test(url + ' ' + String(body || ''))) return false;   // Staging task/hours on job 0860 casting "Test" save for real   // the scheduler's own tables (preview) — nothing else reads them
-    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
     if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
     return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
   }
@@ -49,7 +47,7 @@
     var bar = document.createElement('div');
     bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
       'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
-    bar.innerHTML = '<span>TEST SITE — READ-ONLY. Only the Plant Scheduler's own tables and job 0860 casting "Test" save for real; nothing here touches the live portal, the Optimizer or the weekly.</span>' + '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';opacity:.9">0 saves blocked</span>';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY. Only the Plant Scheduler&#39;s own tables and job 0860 casting "Test" save for real; nothing here touches the live portal, the Optimizer or the weekly.</span>' + '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';opacity:.9">0 saves blocked</span>';
     document.body.appendChild(bar);
   });
 })();
