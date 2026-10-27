@@ -1,5 +1,5 @@
 # Weekly-test
 
-Read-only TEST copy of the portal, built from branch `scheduler` at `3b5f56f`.
+Read-only TEST copy of the portal, built from branch `scheduler` at `9f6294d`.
 Every page carries a guard that blocks saves to the real database except the few tables listed in the red bar.
 The real portal is https://cwe-tools.github.io/Weekly/ — this site is for trying changes before they are published.
