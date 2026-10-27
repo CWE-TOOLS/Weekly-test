@@ -109,7 +109,7 @@ import {
     roundSig,
     FROM_LBS
 } from '../../utils/batch-calc.js';
-import { getSpecialBatching } from '../../config/special-batching.js?v=20261020-3';
+import { getSpecialBatching } from '../../config/special-batching.js?v=20261026-2';
 import { fetchAllTasks } from '../../services/data-service.js';
 import { loadActualHoursForProject } from '../../services/actual-hours-service.js';
 import { parseDate } from '../../utils/date-utils.js';
@@ -128,11 +128,14 @@ import {
 } from '../../services/classroom-tasks-service.js';
 import { renderCastingLayout } from './casting-layout.js?v=20261023-2';
 import { attachLayoutDrag } from './casting-layout-drag.js?v=20260701-01';
-import { activateJigListTab } from './jig-list.js?v=20261014-6';
+import { activateJigListTab } from './jig-list.js?v=20261026-1';
 import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js?v=20261020-2';
 import { loadMilestonesForProject, saveMilestone, isMilestonesMigrationPending, loadLayoutConditions, LAYOUT_CONDITION_PREFIX, layoutConditionNote, parseLayoutCondition, sideWords } from '../../services/milestones-service.js';
+import { loadJigListsForProject as loadJigListsForScrim, scrimForInventory } from '../../services/jig-list-service.js';
 import { loadReadyFlags, setReadyFlag } from '../../services/schedule-service.js?v=20261021-1';
 import { tasksForDepartment, teamOfDepartment, taskForPhase, STAGING_NAME_OF_TEAM } from '../../config/scheduler-config.js?v=20261022-3';
+import { loadReadyFlags, setReadyFlag, loadSettingRows, setSettingRow } from '../../services/schedule-service.js?v=20261027-1';
+import { tasksForDepartment, teamOfDepartment, taskForPhase, STAGING_NAME_OF_TEAM, REVENUE_PER_HOUR } from '../../config/scheduler-config.js?v=20261023-2';
 import {
     loadLayoutPositions,
     snapshotLayout,
@@ -2748,6 +2751,7 @@ async function activateOptimizerTab() {
     }
     await loadAllPhasesForProject();
     try { optReady = await loadReadyFlags(currentCastings.map(c => c.id)); } catch (e) { optReady = new Map(); }
+    await loadOptValue();
     await loadStagingDescriptions();   // the Optimizer Hours tab mirrors Staging (teams × days with task names)
     renderOptimizer();
 }
@@ -2887,10 +2891,14 @@ function renderOptStagedGrid(casting) {
             const entry = currentStagingDescriptions.get(`${castNum}|${sec.department}|${d}`) || {};
             const task = entry.taskName || '';
             const hours = entry.hours == null ? '' : String(entry.hours);
-            rows.push(`<div class="pp-opt-stg-row">
+            const hasBudget = optBudgets.get(casting.id) != null;
+            const pct = optPctOf(casting.id, sec.department, d);
+            const byPct = hasBudget && pct != null;
+            rows.push(`<div class="pp-opt-stg-row${hasBudget ? ' pp-opt-stg-row-pct' : ''}">
                 <span class="pp-opt-day-label">Day ${d}</span>
                 <span class="pp-opt-stg-task${task ? '' : ' pp-opt-stg-task-missing'}" title="${task ? 'Task from the Staging tab' : 'No task picked on the Staging tab yet'}">${task ? escapeHtml(task.toLowerCase()) : '— no task —'}</span>
-                <input type="number" min="0" step="1" class="pp-opt-card-hours" data-action="staged-hours" data-casting-number="${escapeAttr(castNum)}" data-department="${escapeAttr(sec.department)}" data-day="${d}" value="${escapeAttr(hours)}" placeholder="0" title="${escapeAttr((entry.description || '').trim() || 'Hours for this day')}" />
+                ${hasBudget ? `<span class="pp-opt-pct"><input type="number" min="0" max="100" step="1" data-action="staged-pct" data-casting-id="${escapeAttr(casting.id)}" data-department="${escapeAttr(sec.department)}" data-day="${d}" value="${pct == null ? '' : escapeAttr(fmtHrs(pct))}" placeholder="%" title="Share of the casting's budget for this task">%</span>` : ''}
+                <input type="number" min="0" step="1" class="pp-opt-card-hours${byPct ? ' pp-opt-hours-derived' : ''}" data-action="staged-hours" data-casting-number="${escapeAttr(castNum)}" data-department="${escapeAttr(sec.department)}" data-day="${d}" value="${escapeAttr(hours)}" placeholder="0"${byPct ? ' readonly' : ''} title="${byPct ? 'Budget × percent — change the percent to change it' : escapeAttr((entry.description || '').trim() || 'Hours for this day')}" />
                 <span class="pp-opt-card-hours-label">hrs</span>
             </div>`);
         }
@@ -3733,6 +3741,7 @@ async function loadAllPhasesForProject() {
 
 function renderOptimizer() {
     const mig = document.getElementById('pp-opt-migration'); if (mig) mig.hidden = !isStagingTaskHoursMigrationPending();
+    renderOptValue();
     renderOptReadyBar();
     renderOptPills();
     renderOptColumns();
@@ -3792,6 +3801,146 @@ function optReadyHtml(castingId) {
                    : 'Click when this casting\'s hours are ready to be scheduled — it then shows in the Plant Scheduler\'s "Not yet scheduled" list (it also needs a Casting Inventory).';
     return `<button type="button" class="pp-opt-ready ${on ? 'pp-opt-ready-on' : ''}" data-action="toggle-ready" data-casting-id="${escapeAttr(castingId)}" title="${escapeAttr(tip)}">${on ? '&#10003; Ready for scheduling' : 'Ready for scheduling'}</button>`;
 }
+// ---- Project value → Optimizer hours (2026-10-27): PMs enter the job's value (base + change orders); ÷ $135 = the
+// hours the job has; each casting gets a budget; the budgets must add up to exactly those hours.
+let optValueItems = [];          // [{ name, value }]
+let optBudgets = new Map();      // castingId -> hours
+let optPcts = new Map();         // castingId -> { "dept|day": percent } — the casting's budget is split by these
+const optValueSaveTimers = new Map();
+async function loadOptValue() {
+    optValueItems = []; optBudgets = new Map();
+    if (!currentProjectNumber) return;
+    try {
+        const rows = await loadSettingRows([`value:${currentProjectNumber}`, ...currentCastings.map(c => `budget:${c.id}`), ...currentCastings.map(c => `pct:${c.id}`)]);
+        optPcts = new Map();
+        for (const c of currentCastings) { const p = rows.get(`pct:${c.id}`); if (p && typeof p === 'object') optPcts.set(c.id, p); }
+        const v = rows.get(`value:${currentProjectNumber}`);
+        if (v && Array.isArray(v.items)) optValueItems = v.items.map(it => ({ name: String(it.name || ''), value: Number(it.value) || 0 }));
+        for (const c of currentCastings) { const b = rows.get(`budget:${c.id}`); if (b != null && b !== '') optBudgets.set(c.id, Number(b) || 0); }
+    } catch (e) { logger.warn('[project-portal] loadOptValue failed', e); }
+}
+function optTotalValue() { return optValueItems.reduce((n, it) => n + (Number(it.value) || 0), 0); }
+function optJobHours() { return Math.round(optTotalValue() / REVENUE_PER_HOUR * 10) / 10; }
+function optAllocated(castings) { return castings.reduce((n, c) => n + (optBudgets.get(c.id) || 0), 0); }
+const money0 = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('en-US');
+function renderOptValue() {
+    const box = document.getElementById('pp-opt-value');
+    if (!box) return;
+    if (!currentProjectNumber) { box.innerHTML = ''; return; }
+    const total = optTotalValue(), hours = optJobHours();
+    const castings = getCastingsForActivePhase();
+    const alloc = optAllocated(castings), left = Math.round((hours - alloc) * 10) / 10;
+    const rows = optValueItems.map((it, i) => `<div class="pp-opt-val-row"><input type="text" data-val-name="${i}" value="${escapeAttr(it.name)}" placeholder="${i === 0 ? 'Contract value' : 'Change order #' + i}"><span class="pp-opt-val-cur">$</span><input type="number" min="0" step="1" data-val-amount="${i}" value="${it.value ? escapeAttr(String(it.value)) : ''}" placeholder="0"><button type="button" class="pp-opt-val-del" data-val-del="${i}" title="Remove">&times;</button></div>`).join('');
+    const state = !hours ? '' : alloc > hours + 0.01 ? 'pp-opt-val-over' : alloc < hours - 0.01 ? 'pp-opt-val-under' : 'pp-opt-val-ok';
+    const msg = !hours ? 'Enter the project value to get the hours.' : alloc > hours + 0.01 ? `Over by ${fmtHrs(alloc - hours)} h — lower a casting's budget.` : alloc < hours - 0.01 ? `${fmtHrs(left)} h still to put on castings.` : 'Every hour is on a casting.';
+    box.innerHTML = `<div class="pp-opt-val-head"><strong>Project value &rarr; Optimizer hours</strong><span class="pp-opt-val-hint">value &divide; $${REVENUE_PER_HOUR}/h</span></div>
+        <div class="pp-opt-val-rows">${rows || '<div class="pp-opt-val-empty">No value entered yet.</div>'}</div>
+        <button type="button" class="pp-opt-val-add" data-val-add>+ Add value (change order, extra)</button>
+        <div class="pp-opt-val-totals"><span>Total value <strong>${money0(total)}</strong></span><span>Optimizer hours <strong>${fmtHrs(hours)} h</strong></span><span class="pp-opt-val-alloc ${state}">On castings <strong>${fmtHrs(alloc)} h</strong> · ${escapeHtml(msg)}</span></div>`;
+}
+/** Re-draw only the totals line while a PM is typing a value (keeps the caret in the box). */
+function renderOptValueTotalsOnly() {
+    const box = document.getElementById('pp-opt-value'); if (!box) return;
+    const tmp = document.createElement('div'); const keep = box.innerHTML; renderOptValue(); tmp.innerHTML = box.innerHTML; box.innerHTML = keep;
+    const fresh = tmp.querySelector('.pp-opt-val-totals'), cur = box.querySelector('.pp-opt-val-totals');
+    if (fresh && cur) cur.replaceWith(fresh);
+    document.querySelectorAll('#pp-opt-columns .pp-opt-budget').forEach(el => { const id = el.querySelector('input')?.dataset.castingId; if (id) el.outerHTML = optBudgetHtml(id); });
+}
+function fmtHrs(n) { const v = Math.round((Number(n) || 0) * 10) / 10; return Number.isInteger(v) ? String(v) : v.toFixed(1); }
+function scheduleOptValueSave() {
+    const key = `value:${currentProjectNumber}`;
+    const prev = optValueSaveTimers.get(key); if (prev) clearTimeout(prev);
+    optValueSaveTimers.set(key, setTimeout(async () => {
+        optValueSaveTimers.delete(key);
+        try { await setSettingRow(key, { items: optValueItems }); } catch (err) { showToast('Could not save the project value: ' + (err.message || err), 'error'); }
+    }, 500));
+}
+/** Percent of the casting's budget each staged day gets; the hours follow (whole hours, the first day takes the rounding). */
+function optPctOf(castingId, dept, day) { const p = optPcts.get(castingId) || {}; const v = p[`${dept}|${day}`]; return v == null || v === '' ? null : Number(v) || 0; }
+function optPctTotal(castingId) { return Object.values(optPcts.get(castingId) || {}).reduce((n, v) => n + (Number(v) || 0), 0); }
+function optHoursFromPcts(casting) {
+    const b = optBudgets.get(casting.id);
+    if (b == null) return null;
+    const castNum = String(casting.casting_number || '');
+    const cells = optStagedCells(castNum).map(c => ({ ...c, pct: optPctOf(casting.id, c.department, c.day) }));
+    const withPct = cells.filter(c => c.pct != null);
+    if (!withPct.length) return null;
+    const out = new Map();
+    let sum = 0;
+    for (const c of withPct) { const h = Math.floor(b * c.pct / 100); out.set(`${c.department}|${c.day}`, h); sum += h; }
+    // when the percentages reach 100 the hours must reach the budget exactly: the first day takes the rounding
+    if (Math.abs(optPctTotal(casting.id) - 100) < 0.01 && withPct.length) { const k = `${withPct[0].department}|${withPct[0].day}`; out.set(k, Math.round(((out.get(k) || 0) + (b - sum)) * 10) / 10); }
+    return out;
+}
+async function handleStagedPct(castingId, dept, day, raw) {
+    const c = currentCastings.find(x => x.id === castingId);
+    if (!c) return;
+    const val = raw === '' ? null : Math.max(0, Math.min(100, Number(raw) || 0));
+    const map = { ...(optPcts.get(castingId) || {}) };
+    const key = `${dept}|${day}`;
+    const others = Object.entries(map).filter(([k]) => k !== key).reduce((n, [, v]) => n + (Number(v) || 0), 0);
+    if (val != null && others + val > 100.01) {
+        showToast(`That makes ${fmtHrs(others + val)}% — the casting's tasks can only add up to 100%. Most this task can take: ${fmtHrs(100 - others)}%.`, 'error');
+        renderOptimizer();
+        return;
+    }
+    if (val == null) delete map[key]; else map[key] = val;
+    optPcts.set(castingId, map);
+    // the hours follow the percentages
+    const hours = optHoursFromPcts(c) || new Map();
+    const castNum = String(c.casting_number || '');
+    for (const cell of optStagedCells(castNum)) {
+        const k = `${cell.department}|${cell.day}`;
+        const want = hours.has(k) ? hours.get(k) : (optPctOf(castingId, cell.department, cell.day) == null ? cell.hours : null);
+        if ((want == null ? null : Number(want)) !== (cell.hours == null ? null : Number(cell.hours))) scheduleOptHoursSave(castNum, cell.department, cell.day, want == null ? '' : String(want));
+    }
+    renderOptimizer();
+    const skey = `pct:${castingId}`;
+    const prev = optValueSaveTimers.get(skey); if (prev) clearTimeout(prev);
+    optValueSaveTimers.set(skey, setTimeout(async () => { optValueSaveTimers.delete(skey); try { await setSettingRow(skey, map); } catch (err) { showToast('Could not save the percentages: ' + (err.message || err), 'error'); } }, 500));
+}
+
+function optBudgetHtml(castingId) {
+    const b = optBudgets.get(castingId);
+    const c = currentCastings.find(x => x.id === castingId);
+    const entered = c ? optHoursOf(c) : 0;
+    const over = b != null && entered > b + 0.01;
+    return `<div class="pp-opt-budget${over ? ' pp-opt-budget-over' : ''}" title="Hours this casting gets out of the job's Optimizer hours; the hours entered on its days should not exceed it">
+        <span class="pp-opt-budget-label">Budget</span><input type="number" min="0" step="0.5" data-action="casting-budget" data-casting-id="${escapeAttr(castingId)}" value="${b == null ? '' : escapeAttr(fmtHrs(b))}" placeholder="0"><span class="pp-opt-budget-unit">h</span>
+        <span class="pp-opt-budget-entered">entered ${fmtHrs(entered)} h${over ? ' &#9888;' : ''}</span></div>${b == null ? '' : optPctLineHtml(castingId)}`;
+}
+function optPctLineHtml(castingId) {
+    const t = Math.round(optPctTotal(castingId) * 10) / 10;
+    const cls = Math.abs(t - 100) < 0.01 ? 'ok' : t > 100 ? 'over' : 'under';
+    const msg = Math.abs(t - 100) < 0.01 ? 'tasks add up to 100%' : t > 100 ? `${fmtHrs(t)}% — over 100` : `${fmtHrs(t)}% assigned, ${fmtHrs(100 - t)}% left`;
+    return `<div class="pp-opt-pct-line pp-opt-pct-${cls}">${msg}</div>`;
+}
+async function handleCastingBudget(castingId, raw) {
+    if (!currentProjectNumber) return;
+    const val = raw === '' ? null : Math.max(0, Number(raw) || 0);
+    const hours = optJobHours();
+    const others = optAllocated(getCastingsForActivePhase().filter(c => c.id !== castingId));
+    if (val != null && hours > 0 && others + val > hours + 0.01) {
+        showToast(`That would put ${fmtHrs(others + val)} h on castings but the job only has ${fmtHrs(hours)} h. Most you can give this casting: ${fmtHrs(hours - others)} h.`, 'error');
+        renderOptimizer();
+        return;
+    }
+    if (val == null) optBudgets.delete(castingId); else optBudgets.set(castingId, val);
+    const c = currentCastings.find(x => x.id === castingId);
+    if (c && optPcts.get(castingId)) {
+        const hours = optHoursFromPcts(c) || new Map();
+        const castNum = String(c.casting_number || '');
+        for (const cell of optStagedCells(castNum)) { const k = `${cell.department}|${cell.day}`; if (hours.has(k) && Number(hours.get(k)) !== Number(cell.hours)) scheduleOptHoursSave(castNum, cell.department, cell.day, String(hours.get(k))); }
+    }
+    renderOptValue();
+    const key = `budget:${castingId}`;
+    const prev = optValueSaveTimers.get(key); if (prev) clearTimeout(prev);
+    optValueSaveTimers.set(key, setTimeout(async () => {
+        optValueSaveTimers.delete(key);
+        try { await setSettingRow(key, val); } catch (err) { showToast('Could not save the budget: ' + (err.message || err), 'error'); }
+    }, 500));
+}
+
 function renderOptReadyBar() {
     const bar = document.getElementById('pp-opt-ready-bar');
     if (!bar) return;
@@ -3933,6 +4082,7 @@ function renderOptColumn(casting) {
                 </div>
                 ${optMsCellHtml(casting.id)}
                 ${optReadyHtml(casting.id)}
+                ${optBudgetHtml(casting.id)}
             </div>
             ${renderOptStagedGrid(casting)}
             ${phases.some(p => Number(p.hours) > 0) && optStagedHours(String(casting.casting_number || '')) <= 0 ? `<button type="button" class="pp-opt-pull" data-action="pull-legacy" data-casting-id="${escapeAttr(casting.id)}" title="Put the previous task list's hours onto this casting's staged days, team by team">&#8681; Pull hours from the previous task list</button>` : ''}
@@ -8711,8 +8861,26 @@ function wireEvents() {
     const optColumns = document.getElementById('pp-opt-columns');
     optColumns.addEventListener('input', (e) => {
         const inp = e.target.closest('input[data-action="staged-hours"]');
-        if (inp) scheduleOptHoursSave(inp.dataset.castingNumber, inp.dataset.department, parseInt(inp.dataset.day, 10), inp.value);
+        if (inp) { scheduleOptHoursSave(inp.dataset.castingNumber, inp.dataset.department, parseInt(inp.dataset.day, 10), inp.value); return; }
+        const bud = e.target.closest('input[data-action="casting-budget"]');
+        if (bud) { handleCastingBudget(bud.dataset.castingId, bud.value); return; }
+        const pct = e.target.closest('input[data-action="staged-pct"]');
+        if (pct) handleStagedPct(pct.dataset.castingId, pct.dataset.department, parseInt(pct.dataset.day, 10), pct.value);
     });
+    const optValue = document.getElementById('pp-opt-value');
+    if (optValue) {
+        optValue.addEventListener('input', (e) => {
+            const n = e.target.closest('[data-val-name]'), a = e.target.closest('[data-val-amount]');
+            if (n) optValueItems[Number(n.dataset.valName)].name = n.value;
+            if (a) optValueItems[Number(a.dataset.valAmount)].value = Number(a.value) || 0;
+            if (n || a) { scheduleOptValueSave(); const box = optValue.querySelector('.pp-opt-val-totals'); if (box) { renderOptValueTotalsOnly(); } }
+        });
+        optValue.addEventListener('click', async (e) => {
+            if (e.target.closest('[data-val-add]')) { optValueItems.push({ name: optValueItems.length ? `Change order #${optValueItems.length}` : 'Contract value', value: 0 }); renderOptValue(); optValue.querySelector(`[data-val-amount="${optValueItems.length - 1}"]`)?.focus(); scheduleOptValueSave(); return; }
+            const del = e.target.closest('[data-val-del]');
+            if (del) { const it = optValueItems[Number(del.dataset.valDel)]; if (it && (it.value || it.name) && !window.confirm(`Remove "${it.name || 'this value'}" (${money0(it.value)})?`)) return; optValueItems.splice(Number(del.dataset.valDel), 1); renderOptimizer(); scheduleOptValueSave(); }
+        });
+    }
 
     optColumns.addEventListener('click', (e) => {
         const msBtn = e.target.closest('button[data-action="toggle-final-hours"]');
@@ -9697,8 +9865,33 @@ window.addEventListener('message', (e) => {
     }
 });
 
+let btJigLists = new Map();      // castingId -> jig-list state (for the scrim line under Mix Day Totals)
+let btJigListsFor = null;        // project number the map belongs to
+async function ensureJigListsForScrim() {
+    const pn = String(currentProjectNumber || '').trim();
+    if (!pn) return;   // re-read on every open (2026-10-27): a jig list saved after the tab was first opened must show
+    try {
+        const res = await loadJigListsForScrim(pn);
+        btJigLists = res?.byCasting || new Map();
+        btJigListsFor = pn;
+    } catch (err) {
+        logger.error('[project-portal] jig lists for scrim failed (non-fatal):', err);
+        btJigLists = new Map();
+        btJigListsFor = pn;
+    }
+}
+/** The scrim line for a casting: face sq ft from the Casting Inventory × scrim layers from the Jig List cross-section. */
+function scrimLineHtml(casting) {
+    if (!casting) return '';
+    const rows = getInventoryFor(casting.id);
+    if (!rows.length) return '';
+    const { text, detail, warn } = scrimForInventory(rows, btJigLists.get(casting.id));
+    if (!text) return '';
+    return `<div class="pp-bt-totals-scrim${warn ? ' pp-bt-totals-scrim-warn' : ''}" title="${escapeAttr(detail || '')}">${escapeHtml(text)}</div>`;
+}
 async function activateBatchTicketsTab() {
     if (currentProjectNumber) syncCastDatesWithWeekly();   // runs alongside; redraws when the weekly answers
+    await ensureJigListsForScrim();
     const needsSave    = document.getElementById('pp-bt-needs-save');
     const needsCL      = document.getElementById('pp-bt-needs-color-log');
     const noCastings   = document.getElementById('pp-bt-no-castings');
@@ -10302,7 +10495,7 @@ function renderBatchPreview(casting, ticket) {
     const sectionHeader = renderBatchSectionHeader(plan);
     const assign = renderBatchAssignTable(plan);
     // Day totals combine every color ticket on this casting, not just the one being viewed.
-    const totalsPanel = renderBatchTotals(buildBatchTotalsEntries(casting));
+    const totalsPanel = renderBatchTotals(buildBatchTotalsEntries(casting), casting);
     const tickets = renderBatchTicketCards(casting, ticket, plan);
 
     return `
@@ -10419,7 +10612,7 @@ function additiveAmount(item) {
  *   - Pigments multiplied by (1 - reduction%) on FINAL Back Up batches
  * Matches the totals table from Batchin Calc/index.html.
  */
-function renderBatchTotals(entries) {
+function renderBatchTotals(entries, casting = null) {
     entries = (entries || []).filter(e => e?.plan?.batches?.length && e.log);
     if (!entries.length) return '';
 
@@ -10552,6 +10745,15 @@ function renderBatchTotals(entries) {
     if (!rows) return '';
 
     const title = entries.length > 1 ? 'Mix Day Totals — All Colors & Batches' : 'Mix Day Totals — All Batches';
+    // Color Log finishing / sealing notes under the totals (2026-10-26): one pair per colour log on the casting,
+    // so the mix-day sheet carries what the finishing and sealing crews need to know.
+    const logs = [];
+    for (const e of entries) if (e.log && !logs.some(l => l.id === e.log.id)) logs.push(e.log);
+    const noteBlock = (label, text) => `<div class="pp-bt-totals-note"><div class="pp-bt-totals-note-title">${escapeHtml(label)}</div><div class="pp-bt-totals-note-body${text ? '' : ' pp-bt-totals-note-empty'}">${text ? escapeHtml(text) : 'none on the color log'}</div></div>`;
+    const notesHtml = logs.map(log => {
+        const suffix = logs.length > 1 && log.name ? ` — ${log.name}` : '';
+        return `<div class="pp-bt-totals-notes">${noteBlock('Color Log finishing notes' + suffix, String(log.finishingNotes || '').trim())}${noteBlock('Color Log sealing notes' + suffix, String(log.sealingNotes || '').trim())}</div>`;
+    }).join('');
     return `
         <div class="pp-bt-totals-panel">
             <div class="pp-bt-totals-title">${title}</div>
@@ -10559,6 +10761,8 @@ function renderBatchTotals(entries) {
                 <thead><tr><th>Material</th><th class="pp-bt-totals-num">Total Qty</th><th>Unit</th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
+            ${notesHtml}
+            ${scrimLineHtml(casting)}
         </div>
     `;
 }
