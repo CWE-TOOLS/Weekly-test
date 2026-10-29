@@ -17,8 +17,8 @@
 <script>
 (function () {
   var realFetch = window.fetch.bind(window);
-  var TEST_SHEET = '%TEST_SHEET%';
-  var MILL_MOVES = %MILL_MOVES%;   // preview only: [job, cast, day] Mill staging notes shown as Parts (the real rename runs after the sheet swap)   // set when this copy reads a different Google Sheet: it must not share the live cache
+  var TEST_SHEET = '';
+  var MILL_MOVES = [];   // preview only: [job, cast, day] Mill staging notes shown as Parts (the real rename runs after the sheet swap)   // set when this copy reads a different Google Sheet: it must not share the live cache
   // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
   window.addEventListener('error', function (e) {
     var t = e.target; var u = t && (t.src || t.href);
