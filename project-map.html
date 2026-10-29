@@ -96,7 +96,7 @@
     <link rel="stylesheet" href="src/styles/base.css">
     <link rel="stylesheet" href="src/styles/buttons.css">
     <link rel="stylesheet" href="src/styles/finishing-map.css?v=20261026-4">
-    <link rel="stylesheet" href="src/styles/project-map.css?v=20261029-2">
+    <link rel="stylesheet" href="src/styles/project-map.css?v=20261029-4">
 </head>
 <body class="pm-body">
     <div id="fm-app" class="fm-app pm-app">
@@ -136,7 +136,7 @@
                 </div>
                 <input type="search" id="fm-search" class="fm-search" placeholder="Find a job or cast&hellip;" autocomplete="off">
                 <button type="button" id="fm-shipped-btn" class="fm-nav-btn fm-btn-shipped" title="Castings shipped in the last 60 days">Shipped <span class="fm-area-count" id="fm-shipped-count">0</span></button>
-                <button type="button" id="pm-fullscreen" class="fm-nav-btn" title="Use the whole display (Esc leaves it)">Full screen</button>
+                <button type="button" id="pm-fullscreen" class="fm-nav-btn" title="Use the whole display for the cells (Esc leaves it)">&#x26F6; Full screen</button>
                 <button type="button" id="fm-refresh" class="fm-nav-btn" title="Reload the weekly">Refresh</button>
                 <span id="fm-updated" class="fm-updated"></span>
             </div>
@@ -148,6 +148,7 @@
             <span class="pm-dummy-tag">DUMMY</span>
             <b id="pm-dummy-name"></b>
             <span class="pm-dummy-state" id="pm-dummy-state"></span>
+            <span class="pm-dummy-nosave" id="pm-dummy-nosave" title="The dummy tables are not in the database (migration/project-map-dummies.sql). You can move cards; Save will not work." hidden>Save off: no dummy tables yet</span>
             <label class="pm-dummy-chain"><input type="checkbox" id="pm-dummy-chain" checked> Move chain with it</label>
             <span class="pm-pick-note" id="pm-pick-note" hidden><span class="pm-pick-tag">MOVING</span> <b id="pm-pick-what"></b> &mdash; tap the day it should start on <button type="button" class="fm-mini-btn" id="pm-pick-cancel">Cancel</button></span>
             <span class="pm-dummy-actions">
@@ -179,7 +180,7 @@
         </div>
     </div>
 
-    <script type="module" src="src/pages/project-map/project-map-page.js?v=20261029-2"></script>
+    <script type="module" src="src/pages/project-map/project-map-page.js?v=20261029-4"></script>
     <script type="module" src="src/utils/auto-update.js?v=20261023-1"></script>
 </body>
 </html>
