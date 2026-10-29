@@ -98,6 +98,104 @@
 .pm-dept-list li label { display: flex; align-items: center; gap: 0.4rem; padding: 0.2rem 0.3rem; font-size: 12.5px; cursor: pointer; border-radius: 4px; }
 .pm-dept-list li label:hover { background: #f1f5f9; }
 
+/* ---------- dummy mode ---------- */
+.pm-dummy-toggle { border: 1px solid #c026d3; color: #a21caf; border-radius: 999px; margin-left: 0.5rem; }
+.pm-dummy-toggle.pm-view-on { background: #a21caf; color: #fff; }
+.pm-dummy-bar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  margin: 0.45rem 0.8rem 0; padding: 0.35rem 0.7rem; border-radius: 6px;
+  background: #fdf4ff; border: 2px solid #c026d3; color: #701a75; font-size: 12.5px;
+}
+.pm-dummy-bar[hidden] { display: none; }
+.pm-dummy-tag { background: #a21caf; color: #fff; font-weight: 900; letter-spacing: 0.1em; padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 11px; }
+.pm-dummy-state { color: #86198f; }
+.pm-dummy-chain { display: flex; align-items: center; gap: 0.3rem; font-weight: 600; margin-left: 0.4rem; }
+.pm-dummy-actions { margin-left: auto; display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.pm-dummy-exit { border-color: #a21caf; color: #a21caf; }
+body.pm-dummy .pm-app { background: #7c5f86; }
+body.pm-dummy .fm-chip[draggable="true"] { cursor: grab; }
+body.pm-dummy .fm-chip[draggable="true"]:active { cursor: grabbing; }
+.pm-chip-moved { border-left-color: #c026d3 !important; background: #fdf4ff !important; outline: 1.5px dashed #c026d3; outline-offset: -1px; }
+.pm-moved-tag { background: #c026d3; color: #fff; font-size: 9.5px; font-weight: 800; padding: 0 0.3rem; border-radius: 3px; vertical-align: middle; }
+.pm-orig { color: #86198f; font-weight: 600; }
+.pm-movebox { margin-top: 0.35rem; padding-top: 0.3rem; border-top: 1px dashed #e2e8f0; font-size: 11.5px; }
+.pm-movebox label { display: flex; align-items: center; gap: 0.4rem; }
+.pm-movebox input { font: inherit; font-size: 11.5px; padding: 1px 4px; border: 1px solid #cbd5e1; border-radius: 4px; }
+.pm-section-h { font-weight: 700; color: #475569; text-transform: none; letter-spacing: 0; font-size: 10.5px; margin-left: 0.25rem; }
+.pm-section-h.pm-over { color: #b91c1c; }
+.pm-section-head-day { justify-content: flex-end; padding: 0.05rem 0.4rem; }
+.pm-section-head-day .pm-section-h:empty { display: none; }
+.pm-section-head-day:not(:has(.pm-section-h:not(:empty))) { display: none; }
+.pm-section-sq:empty { display: none; }
+.pm-day-dept .pm-section-sq { margin-left: 0; }
+.pm-cell-over { box-shadow: inset 0 0 0 2px #dc2626; }
+.pm-cell-over .pm-section-head { background: #fee2e2; }
+.pm-drop-ok { outline: 2px dashed rgba(192, 38, 211, 0.6); outline-offset: -3px; }
+.pm-cell.fm-drop-hover { background: #f5d0fe !important; }
+body.pm-dragging .pm-cell:not(.pm-drop-ok) { opacity: 0.45; }
+.pm-final-tag { background: #166534; color: #fff; font-size: 10px; font-weight: 800; padding: 0.05rem 0.4rem; border-radius: 3px; margin-left: 0.3rem; }
+.pm-dummy-row .fm-bulk-go { padding: 0.2rem 0.8rem; }
+
+/* ---------- Calendar (dummy mode): the month as the conference-room whiteboard — Week 1, 2, 3… rows, a cell per day,
+   the day's jobs grouped by department inside the cell (user, 2026-10-27) ---------- */
+.pm-view-btn[hidden] { display: none; }
+.pm-view-cal { border-left: 1px solid #cbd5e1; }
+.pm-calendar { column-gap: 0.3rem; row-gap: 0.3rem; }
+.pm-cal-dow { text-align: center; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #f8fafc; padding: 0.1rem 0 0; }
+.pm-cal-week { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 0.15rem; background: #1e293b; color: #f8fafc; border-radius: 8px; font-size: 12.5px; font-weight: 800; text-align: center; padding: 0.3rem; }
+.pm-cal-week .pm-section-sub { color: #cbd5e1; }
+.pm-calendar .pm-cell { border: 2px solid #475569; border-radius: 8px; background: #fff; overflow: hidden; }
+.pm-calendar .pm-cell.pm-cal-sun { background: #f1f5f9; }
+.pm-calendar .pm-cell.pm-cal-today { border-color: #1d4ed8; box-shadow: inset 0 0 0 2px #93c5fd; }
+.pm-cal-date { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.15rem 0.4rem; padding: 0.1rem 0.4rem; font-size: 11.5px; color: #1e293b; background: #e2e8f0; border-bottom: 1px solid #cbd5e1; }
+.pm-cal-today .pm-cal-date { background: #dbeafe; }
+.pm-cal-date[data-open-day] { cursor: pointer; }
+.pm-cal-date[data-open-day]:hover { background: #cbd5e1; }
+.pm-day-dept { display: flex; align-items: center; gap: 0.5rem; }
+.pm-cal-date-n { font-weight: 600; color: #64748b; font-size: 10.5px; white-space: nowrap; margin-left: auto; }
+.pm-cal-open { background: #fde047; color: #713f12; font-weight: 900; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; padding: 0.05rem 0.45rem; border-radius: 999px; line-height: 1.3; box-shadow: 0 0 0 1px #ca8a04; }   /* "open Cast, Finish day": bright, so a free day jumps out */
+.pm-cal-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; overscroll-behavior: contain; padding: 0.25rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.pm-cal-body::-webkit-scrollbar { width: 6px; }
+.pm-cal-body::-webkit-scrollbar-thumb { background: rgba(15, 23, 42, 0.3); border-radius: 3px; }
+.pm-cal-dept { border-left: 4px solid var(--pm-col, #1f2937); border-radius: 4px; background: color-mix(in srgb, var(--pm-col, #1f2937) 8%, white); }
+.pm-cal-dept-head { display: flex; align-items: baseline; gap: 0.35rem; padding: 0.08rem 0.35rem; font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #1e293b; cursor: pointer; background: color-mix(in srgb, var(--pm-col, #1f2937) 22%, white); border-radius: 0 4px 0 0; }
+.pm-cal-dept-head:hover { background: color-mix(in srgb, var(--pm-col, #1f2937) 34%, white); }
+.pm-cal-dept-head .pm-section-n { margin-left: auto; }
+.pm-cal-dept-head .pm-section-h { margin-left: 0; }
+.pm-cal-dept-over { box-shadow: inset 0 0 0 2px #dc2626; }
+.pm-cal-dept-over .pm-cal-dept-head { background: #fee2e2; }
+.pm-calendar .pm-cell .fm-cards { flex: 0 0 auto; overflow: visible; padding: 0.25rem; gap: 0.25rem; }
+
+/* ---------- touch: pick a card up with its Move button, tap the day; bigger targets on touch displays (2026-10-27) ---------- */
+.pm-pick-note { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-weight: 600; color: #701a75; }
+.pm-pick-note[hidden] { display: none; }
+.pm-pick-tag { background: #c026d3; color: #fff; font-weight: 900; letter-spacing: 0.08em; padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 11px; }
+.pm-movebox { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.pm-pickup { padding: 0.3rem 0.8rem; }
+.pm-cell.pm-pick-ok { outline: 3px dashed #c026d3; outline-offset: -4px; cursor: pointer; animation: pm-pick-pulse 1.2s ease-in-out infinite; }
+.pm-cell.pm-pick-ok .pm-section-head[data-open-band], .pm-cell.pm-pick-ok .pm-cal-dept-head, .pm-cell.pm-pick-ok .pm-cal-date { pointer-events: none; }   /* while moving, a tap anywhere in the cell is the drop */
+body.pm-picking .pm-cell:not(.pm-pick-ok) { opacity: 0.45; }
+@keyframes pm-pick-pulse { 0%, 100% { outline-color: rgba(192, 38, 211, 0.9); } 50% { outline-color: rgba(192, 38, 211, 0.35); } }
+body.pm-dummy .fm-chip { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+html { touch-action: manipulation; }   /* no double-tap zoom delay on touch displays */
+@media (pointer: coarse) {
+  .fm-nav-btn, .pm-view-btn, .fm-mini-btn { min-height: 2.3rem; padding-left: 0.9rem; padding-right: 0.9rem; }
+  .pm-arrow { min-width: 2.6rem; }
+  .pm-cell .fm-chip { padding: 0.35rem 0.5rem; }
+  .pm-cal-dept-head, .pm-section-head { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+  .pm-dept-list li label { padding: 0.45rem 0.4rem; font-size: 14px; }
+  .pm-movebox input { font-size: 14px; padding: 4px 6px; }
+}
+
+/* dummy mode: Cast with more than CAST_PER_DAY_LIMIT castings on one day — the count goes red */
+.pm-section-n.pm-cast-over { background: #dc2626; color: #fff; border-radius: 4px; padding: 0 0.4rem; font-weight: 900; box-shadow: 0 0 0 1px #7f1d1d; white-space: nowrap; }
+.pm-day-dept .pm-cast-over { margin-left: 0.2rem; font-size: 11px; }
+.pm-cast-risk { margin-left: auto; color: #b91c1c; font-weight: 900; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.pm-section-head .pm-cast-risk + .pm-section-n, .pm-cal-dept-head .pm-cast-risk + .pm-section-n { margin-left: 0.3rem; }
+/* dummy mode sq ft on a line: green under 300, orange 300–350, red 350 and over (its own scale, not tied to the cast warning) */
+.pm-section-sq.pm-sq-ok { color: #15803d; font-weight: 800; }
+.pm-section-sq.pm-sq-warn { color: #c2410c; font-weight: 800; }
+.pm-section-sq.pm-sq-over { color: #b91c1c; font-weight: 800; }
 /* ---------- loads on a line (2026-10-27): finished-face sq ft and the cast warning ---------- */
 .pm-section-sq { font-weight: 800; font-size: 10.5px; text-transform: none; letter-spacing: 0; margin-left: 0.25rem; white-space: nowrap; }
 .pm-section-sq:empty { display: none; }

@@ -16,8 +16,9 @@
 <head>
 <script>
 (function () {
-  window.__SCHEDULER_CREW_PREVIEW = true;   // test site only: the weekly shows the Plant Scheduler's crew on its cards
   var realFetch = window.fetch.bind(window);
+  var TEST_SHEET = '%TEST_SHEET%';
+  var MILL_MOVES = %MILL_MOVES%;   // preview only: [job, cast, day] Mill staging notes shown as Parts (the real rename runs after the sheet swap)   // set when this copy reads a different Google Sheet: it must not share the live cache
   // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
   window.addEventListener('error', function (e) {
     var t = e.target; var u = t && (t.src || t.href);
@@ -29,20 +30,51 @@
     return xo.apply(this, arguments);
   };
   var blocked = 0;
+  // Rows that belong to the 0860 "Test" casting (inventory / components), learned from what the database returns:
+  // edits and deletes of those rows save for real too, so an Import Remakes there can be tried and cleaned up.
+  var testRows = {};
+  function learn(url, res) {
+    if (!/\/rest\/v1\/(casting_inventory|casting_components)/i.test(url) || !res || !res.ok) return res;
+    try { res.clone().json().then(function (j) { (Array.isArray(j) ? j : [j]).forEach(function (r) { if (r && r.casting_id === '1a836a86-2709-4447-b604-d8e8a887bd0b' && r.id) testRows[r.id] = 1; }); }).catch(function () {}); } catch (e) {}
+    return res;
+  }
   // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
   function isWrite(url, method, body) {
     method = (method || 'GET').toUpperCase();
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
     if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;
-    if (/\/rest\/v1\/task_descriptions/i.test(url) && /0860/.test(url + ' ' + String(body || '')) && /casting_number(=eq\.|":")Test/.test(url + ' ' + String(body || ''))) return false;   // Staging task/hours on job 0860 casting "Test" save for real   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/finishing_map/i.test(url)) return false;   // the Finishing Map's own table (preview) — nothing else reads it   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory|casting_components)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
     if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    if (/\/rest\/v1\/(casting_inventory|casting_components)/i.test(url)) { var hay = url + ' ' + String(body || ''); for (var id in testRows) if (hay.indexOf(id) >= 0) return false; }   // rows of the "Test" casting
     return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
   }
   window.fetch = function (input, init) {
     var url = typeof input === 'string' ? input : (input && input.url) || '';
     var method = (init && init.method) || (input && input.method) || 'GET';
+    if (TEST_SHEET && /\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) {
+      // Different sheet than live: never read or write the shared sheets_cache. Reads miss, the lock is always "ours", writes vanish.
+      if (/acquire_cache_update_lock/i.test(url)) return Promise.resolve(new Response('true', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      if (/release_cache_update_lock/i.test(url)) return Promise.resolve(new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      if ((method || 'GET').toUpperCase() === 'GET') return Promise.resolve(new Response('{"code":"PGRST116","message":"test copy reads its own sheet, no shared cache"}', { status: 406, headers: { 'Content-Type': 'application/json' } }));
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
     var bodyText = (init && typeof init.body === 'string') ? init.body : '';
     if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      learn(url, res);
+      if (MILL_MOVES.length && (method || 'GET').toUpperCase() === 'GET' && /\/rest\/v1\/task_descriptions/i.test(url) && res && res.ok) {
+        return res.clone().json().then(function (j) {
+          var list = Array.isArray(j) ? j : [j]; var n = 0;
+          var urlPn = (decodeURIComponent(url).match(/project_number=eq\.([^&]+)/) || [])[1] || '';   // the portal's per-job query does not select project_number
+          list.forEach(function (r) { var pn = r && (r.project_number || urlPn); if (r && r.department === 'Mill' && MILL_MOVES.some(function (m) { return m[0] === pn && m[1] === r.casting_number && m[2] === String(r.day_number); })) { r.department = 'Parts'; n++; } });
+          if (n) console.info('[test copy] preview: ' + n + ' Mill staging notes shown as Parts');
+          var hh = { 'Content-Type': 'application/json' }; var cr = res.headers.get('content-range'); if (cr) hh['Content-Range'] = cr;
+          return new Response(JSON.stringify(j), { status: res.status, headers: hh });
+        }).catch(function () { return res; });
+      }
       if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
       return res;
     });
@@ -60,11 +92,9 @@
     var bar = document.createElement('div');
     bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
       'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
-    bar.innerHTML = '<span>TEST SITE — READ-ONLY. Only the Plant Scheduler&#39;s own tables and job 0860 casting "Test" save for real; nothing here touches the live portal, the Optimizer or the weekly.</span>' + '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
     document.body.appendChild(bar);
-    var st = document.createElement('style');   // keep the banner off the page's bottom edge (scheduler scrollbar, floating boxes)
-    st.textContent = '#sc-app{height:calc(100vh - ' + bar.offsetHeight + 'px) !important}body{padding-bottom:' + bar.offsetHeight + 'px}';
-    document.head.appendChild(st);
   });
 })();
 </script>
