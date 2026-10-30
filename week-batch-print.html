@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  window.__SCHEDULER_CREW_PREVIEW = true;   // test site only: the weekly shows the Plant Scheduler's crew on its cards
+  var realFetch = window.fetch.bind(window);
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;
+    if (/\/rest\/v1\/task_descriptions/i.test(url) && /0860/.test(url + ' ' + String(body || '')) && /casting_number(=eq\.|":")Test/.test(url + ' ' + String(body || ''))) return false;   // Staging task/hours on job 0860 casting "Test" save for real   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY. Only the Plant Scheduler&#39;s own tables and job 0860 casting "Test" save for real; nothing here touches the live portal, the Optimizer or the weekly.</span>' + '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+    var st = document.createElement('style');   // keep the banner off the page's bottom edge (scheduler scrollbar, floating boxes)
+    st.textContent = '#sc-app{height:calc(100vh - ' + bar.offsetHeight + 'px) !important}body{padding-bottom:' + bar.offsetHeight + 'px}';
+    document.head.appendChild(st);
+  });
+})();
+</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Batch tickets — week</title>
+    <link rel="icon" href="data:,">
+    <style>
+        /* screen chrome only; the ticket pages carry the portal's print stylesheet (added by the script) */
+        body { margin: 0; background: #e5e7eb; font-family: 'Segoe UI', Arial, sans-serif; color: #111; }
+        .wb-bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: #111827; color: #fff; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+        .wb-bar h1 { font-size: 16px; margin: 0; font-weight: 700; }
+        .wb-bar a { color: #93c5fd; text-decoration: none; font-size: 13px; }
+        .wb-bar a:hover { text-decoration: underline; }
+        .wb-bar .wb-summary { font-size: 13px; color: #d1d5db; margin-left: auto; }
+        .wb-bar button { background: #16a34a; color: #fff; border: none; border-radius: 8px; padding: 8px 18px; font-size: 14px; font-weight: 700; cursor: pointer; }
+        .wb-bar button:disabled { background: #6b7280; cursor: not-allowed; }
+        .wb-status { padding: 8px 16px; font-size: 13px; color: #374151; background: #f3f4f6; border-bottom: 1px solid #d1d5db; min-height: 18px; }
+        .wb-warn { color: #b45309; font-weight: 700; }
+        #wb-doc { padding: 16px; }
+        #wb-doc .bt-page { background: #fff; margin: 0 auto 16px; max-width: 7.7in; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+        .wb-hidden-frame { position: absolute; left: -10000px; top: 0; width: 900px; height: 600px; border: 0; opacity: 0; pointer-events: none; }
+        /* cover + totals pages */
+        .wb-cover { border-color: #111827 !important; }
+        .wb-cover h1 { font-size: 22pt; margin: 0 0 6pt; }
+        .wb-sub { font-size: 11pt; color: #374151; margin-bottom: 14pt; }
+        .wb-list { width: 100%; border-collapse: collapse; font-size: 10.5pt; }
+        .wb-list th, .wb-list td { border-bottom: 1px solid #d1d5db; padding: 4pt 6pt; text-align: left; vertical-align: top; }
+        .wb-list th { background: #f3f4f6; font-size: 9.5pt; letter-spacing: .04em; text-transform: uppercase; }
+        .wb-list .wb-num { text-align: right; }
+        .wb-list tr.wb-miss td { color: #6b7280; }
+        .wb-hint { margin-top: 14pt; font-size: 10pt; color: #4b5563; }
+        .wb-totals { border-color: #16a34a !important; }
+        .wb-week { border-color: #111827 !important; }
+        .pp-bt-totals-panel { font-size: 11pt; }
+        .pp-bt-totals-title { font-size: 15pt; font-weight: 800; margin-bottom: 10pt; }
+        .pp-bt-totals-table { width: 100%; border-collapse: collapse; }
+        .pp-bt-totals-table th, .pp-bt-totals-table td { border-bottom: 1px solid #d1d5db; padding: 4pt 8pt; text-align: left; }
+        .pp-bt-totals-table th { background: #f3f4f6; font-size: 9.5pt; text-transform: uppercase; letter-spacing: .04em; }
+        .pp-bt-totals-num { text-align: right; font-variant-numeric: tabular-nums; }
+        .pp-bt-totals-cat-row td { background: #e5e7eb; font-weight: 800; font-size: 10pt; letter-spacing: .04em; text-transform: uppercase; }
+        @media print {
+            body { background: #fff; }
+            .wb-bar, .wb-status, .wb-hidden-frame { display: none !important; }
+            #wb-doc { padding: 0; }
+            #wb-doc .bt-page { box-shadow: none; margin: 0; max-width: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="wb-bar">
+        <h1 id="wb-title">Batch tickets — week</h1>
+        <a href="index.html">&larr; Weekly Schedule</a>
+        <span class="wb-summary" id="wb-summary"></span>
+        <button type="button" id="wb-print" disabled title="Print every ticket on this page; the Releasability Board's Batching Sheets is stamped for each casting">Print</button>
+    </div>
+    <div class="wb-status" id="wb-status">Loading…</div>
+    <div id="wb-doc"></div>
+    <script type="module" src="src/utils/auto-update.js?v=20261023-1"></script>
+    <script type="module" src="src/pages/week-batch/week-batch-page.js?v=20261030-1"></script>
+</body>
+</html>
