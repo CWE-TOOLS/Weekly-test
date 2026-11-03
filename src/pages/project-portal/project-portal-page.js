@@ -2263,28 +2263,7 @@ async function handleImportRemakesConfirm() {
     }
 }
 
-const castNumConflictShown = new Map();   // castingId -> the typed number the toast was last shown for (one toast per attempt)
-/** A cast number another casting on the job already has can never save: say so, and put the saved number back once
- *  the PM leaves the box (not while typing, "1" on the way to "1A" must not be clobbered) (2026-11-03). */
-function castNumberConflict(id, numInput, typed) {
-    const saved = String(currentCastings.find(c => c.id === id)?.casting_number || '');
-    const leaving = document.activeElement !== numInput;
-    numInput.classList.add('pp-cast-num-conflict');
-    numInput.title = `Cast number "${typed}" is already used on this job — it cannot be saved${saved ? `; still "${saved}"` : ''}.`;
-    if (leaving) {
-        numInput.value = saved;
-        numInput.classList.remove('pp-cast-num-conflict'); numInput.removeAttribute('title');
-        castNumConflictShown.delete(id);
-        showToast(`Cast number "${typed}" is already used on this job — kept "${saved}". Rename the other casting first.`, 'error', 6000);
-    } else if (castNumConflictShown.get(id) !== typed) {
-        castNumConflictShown.set(id, typed);
-        showToast(`Cast number "${typed}" is already used on this job — it will not save.`, 'error', 4000);
-    }
-}
-const savesInFlight = new Set();   // promises of casting / inventory saves still talking to the database (a live reload waits for them)
-function trackSave(p) { savesInFlight.add(p); p.finally(() => savesInFlight.delete(p)); return p; }
-function handleSaveCasting(id) { return trackSave(handleSaveCastingNow(id)); }
-async function handleSaveCastingNow(id) {
+async function handleSaveCasting(id) {
     const card = document.querySelector(`.pp-cast-card[data-casting-id="${id}"]`);
     if (!card) return;
     const numInput = card.querySelector('input[data-field="casting_number"]');
@@ -2298,11 +2277,12 @@ async function handleSaveCastingNow(id) {
             const idx = currentCastings.findIndex(c => c.id === id);
             if (idx !== -1) currentCastings[idx] = updated;
         }
-        numInput.classList.remove('pp-cast-num-conflict'); numInput.removeAttribute('title');
-        castNumConflictShown.delete(id);
     } catch (err) {
         logger.error('[project-portal] save casting failed:', err);
-        if (err.code === '23505') { castNumberConflict(id, numInput, num); return; }   // a number another casting already has
+        if (err.code === '23505') {
+            // Conflict on casting_number — silent during typing; revert next render fixes it.
+            return;
+        }
         showToast('Save failed: ' + (err.message || err), 'error');
     }
 }
@@ -2385,8 +2365,7 @@ async function handleAddInventoryItem(castingId) {
     }
 }
 
-function saveInventoryItem(itemId, castingId) { return trackSave(saveInventoryItemNow(itemId, castingId)); }
-async function saveInventoryItemNow(itemId, castingId) {
+async function saveInventoryItem(itemId, castingId) {
     const row = document.querySelector(`.pp-inv-row[data-inventory-id="${itemId}"]`);
     if (!row) return;
     const casting = currentCastings.find(c => c.id === castingId);
@@ -4492,9 +4471,9 @@ function handleCopyHours(castingId) {
     const cells = optStagedCells(castNum0);
     if (cells.length) {
         // the day grid is what shows: copy its hours (department + day), not the old task list
-        copiedStaged = { castNum: castNum0, entries: cells.map(c => ({ department: c.department, day: c.day, hours: c.hours == null ? null : Number(c.hours) })) };
+        copiedStaged = { castNum: castNum0, entries: cells.map(c => ({ department: c.department, day: c.day, taskName: c.taskName || '', hours: c.hours == null ? null : Number(c.hours) })) };
         copiedPhases = null;
-        showToast(`Copied the day hours of Cast ${castNum0} (${cells.length} day${cells.length === 1 ? '' : 's'}). Use Paste on another casting — matching departments and days get the hours.`);
+        showToast(`Copied Cast ${castNum0}'s days (${cells.length}). Use Paste on another casting — it gets the same days, task words and hours.`);
         renderOptColumns();
         return;
     }
@@ -4514,20 +4493,38 @@ function handleCopyHours(castingId) {
 async function handlePasteHours(targetCastingId) {
     if (!targetCastingId) return;
     if (copiedStaged) {
+        // The target casting gets the source's days, task words and hours (user 2026-11-03): days it does not have
+        // yet are created (the same as "+ Day" on the Staging tab), days that already happened are left alone, and
+        // the target's own extra days keep what they had.
         const target = currentCastings.find(c => c.id === targetCastingId);
         const tCast = String(target?.casting_number || '');
-        const scaffold = currentStagingScaffold.get(tCast) || [];
-        let pasted = 0, noDay = 0, locked = 0;
-        for (const e of copiedStaged.entries) {
-            const sec = scaffold.find(s => s.department === e.department);
-            if (!sec || e.day > sec.days) { noDay++; continue; }                  // the target has no such day on its Staging tab
+        if (!tCast) return;
+        if (tCast === copiedStaged.castNum) { showToast(`Those are Cast ${tCast}'s own hours — paste them on another casting.`, 'error'); return; }
+        let scaffold = currentStagingScaffold.get(tCast);
+        if (!scaffold) { scaffold = []; currentStagingScaffold.set(tCast, scaffold); }
+        // only days up to the last day with a task or hours in each department — trailing empty days are not copied
+        const lastWith = new Map();
+        for (const e of copiedStaged.entries) if (e.hours != null || e.taskName) lastWith.set(e.department, Math.max(lastWith.get(e.department) || 0, e.day));
+        const entries = copiedStaged.entries.filter(e => e.day <= (lastWith.get(e.department) || 0));
+        let pasted = 0, locked = 0, created = 0, failed = 0;
+        for (const e of entries) {
             if (optPastDays.get(`${tCast}|${e.department}|${e.day}`)) { locked++; continue; }   // already happened — locked
-            scheduleOptHoursSave(tCast, e.department, e.day, e.hours == null ? '' : String(e.hours));
-            pasted++;
+            let sec = scaffold.find(s => s.department === e.department);
+            if (!sec) { sec = { department: e.department, days: 0 }; scaffold.push(sec); }
+            if (e.day > sec.days) { created += e.day - sec.days; sec.days = e.day; }
+            const key = `${tCast}|${e.department}|${e.day}`;
+            const cur = currentStagingDescriptions.get(key) || { description: '', castingSide: null };
+            currentStagingDescriptions.set(key, { ...cur, taskName: e.taskName || '', hours: e.hours });
+            try {
+                await upsertTaskDescription({ projectNumber: currentProjectNumber, castingNumber: tCast, department: e.department, dayNumber: String(e.day), taskName: e.taskName || null, hours: e.hours });
+                pasted++;
+            } catch (err) { failed++; logger.error('[project-portal] paste day failed:', err); }
         }
+        scaffold.sort((a, b) => DEPARTMENT_ORDER.indexOf(a.department) - DEPARTMENT_ORDER.indexOf(b.department));
+        deriveStagingMilestones();
         renderOptimizer();
-        const why = [noDay ? `${noDay} skipped — Cast ${tCast} has no such day on the Staging tab` : '', locked ? `${locked} skipped — those days already happened` : ''].filter(Boolean).join('; ');
-        showToast(pasted ? `Pasted ${pasted} day${pasted === 1 ? '' : 's'} of hours from Cast ${copiedStaged.castNum} into Cast ${tCast}${why ? ' (' + why + ')' : ''}.` : `Nothing pasted into Cast ${tCast}${why ? ': ' + why : ''}.`, pasted ? 'success' : 'error');
+        const why = [created ? `${created} day${created === 1 ? '' : 's'} added` : '', locked ? `${locked} skipped — those days already happened` : '', failed ? `${failed} FAILED to save` : ''].filter(Boolean).join('; ');
+        showToast(pasted ? `Pasted ${pasted} day${pasted === 1 ? '' : 's'} (tasks + hours) from Cast ${copiedStaged.castNum} into Cast ${tCast}${why ? ' (' + why + ')' : ''}.` : `Nothing pasted into Cast ${tCast}${why ? ': ' + why : ''}.`, pasted && !failed ? 'success' : 'error');
         return;
     }
     if (!Array.isArray(copiedPhases) || copiedPhases.length === 0) return;
@@ -6572,17 +6569,6 @@ function scheduleLiveReload(delay = 0) {
 }
 function armLiveReloadRetry() { scheduleLiveReload(1500); }   // after a blur: let the debounced save land first
 
-/** The user's own saves that are still waiting (debounced) or in flight: fire the waiting ones now and wait for all of
- *  them, so a redraw from the database never overdraws what was typed a moment ago (2026-11-03). */
-async function flushPendingSaves() {
-    for (const [id, t] of [...castingSaveTimers]) { clearTimeout(t); castingSaveTimers.delete(id); handleSaveCasting(id); }
-    for (const [itemId, t] of [...inventorySaveTimers]) {
-        clearTimeout(t); inventorySaveTimers.delete(itemId);
-        const row = document.querySelector(`.pp-inv-row[data-inventory-id="${itemId}"]`);
-        if (row) saveInventoryItem(itemId, row.getAttribute('data-casting-id'));
-    }
-    if (savesInFlight.size) await Promise.allSettled([...savesInFlight]);
-}
 async function runLiveReload() {
     liveReloadTimer = null;
     if (!liveReloadPending.size || liveReloadRunning) return;
@@ -6592,7 +6578,6 @@ async function runLiveReload() {
     liveReloadPending.clear();
     liveReloadRunning = true;
     try {
-        await flushPendingSaves();   // what the user just typed lands first; the redraw reads it back
         if (wanted.has('*')) {
             await liveReloadProjectAndPhases();
             await loadAndRenderCastings();
@@ -9870,15 +9855,6 @@ function wireEvents() {
         if (e.target.tagName === 'SELECT') e.target.dataset.beforeLabel = e.target.selectedOptions[0]?.text || '';
     });
     castingsList.addEventListener('focusout', (e) => { invRecordEdit(e.target); });
-    castingsList.addEventListener('focusout', (e) => {
-        if (!e.target.matches('.pp-cast-card-header input[data-field="casting_number"], .pp-cast-card-header input[data-field="description"]')) return;
-        const id = e.target.closest('.pp-cast-card[data-casting-id]')?.getAttribute('data-casting-id');
-        if (!id) return;
-        const t = castingSaveTimers.get(id);
-        if (t) clearTimeout(t);
-        castingSaveTimers.delete(id);
-        handleSaveCasting(id);   // the number is checked now; a conflicting one goes back to the saved value with a toast
-    });
     castingsList.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-action="inv-undo"]');
         if (!btn) return;
