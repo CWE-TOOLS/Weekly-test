@@ -84,7 +84,7 @@ import {
     updateInventoryItem,
     deleteInventoryItem,
     setInventoryOrder
-} from '../../services/inventory-service.js?v=20261111-4';
+} from '../../services/inventory-service.js?v=20261110-1';
 import {
     loadColorLogForProject,
     loadColorLogsForProject,
@@ -130,7 +130,7 @@ import {
 } from '../../services/classroom-tasks-service.js';
 import { renderCastingLayout, computeLayoutRects, parseDimension } from './casting-layout.js?v=20261106-7';
 import { attachLayoutDrag } from './casting-layout-drag.js?v=20261106-6';
-import { activateJigListTab } from './jig-list.js?v=20261106-1';
+import { activateJigListTab } from './jig-list.js?v=20261111-1';
 import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js?v=20261106-1';
 import { SLUMP_TARGET_DEFAULTS, FINAL_BACKUP_PIG_REDUCTION_PCT, parsePigReduction, BT_IMPORT_META, btOverrides, btImportStamp, btStampDate, additiveAmount, batchTotalsRows, renderBatchTotals, clampSlumpTarget, formatSlumpLabel, renderSlumpGraphic, renderBatchTicketCard, BATCH_PRINT_CSS } from '../../services/batch-ticket-render.js';
 import { finishingProductsHtml, faceSqFtOfInventory } from '../../services/finishing-products.js?v=20261106-1';   // moved out 2026-10-30 so the weekly's week print shares the ticket code
@@ -146,8 +146,6 @@ import {
     deleteLayoutPosition,
 } from '../../services/casting-layout-service.js';
 import { registerRefreshHandler, isPortalChange, isOwnSignal, signalInfo } from '../../services/supabase-service.js';
-// Type master list (2026-11-11): the job's types + totals above the castings; casting rows pick their type from it.
-import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, TM_NEW } from './type-master.js?v=20261111-5';
 import '../../utils/number-wheel-guard.js';   // the mouse wheel must not change a focused hour box (user 2026-11-03)
 
 const STATUS_SORT_ORDER = {
@@ -1252,7 +1250,6 @@ async function loadAndRenderCastings() {
         currentCastInvExpanded = new Set();
         castInvExpandedProject = null;
         currentCastingInventoryLoadedFor = null;
-        await loadTypeMaster(null);
         renderCastings();
         return;
     }
@@ -1268,8 +1265,7 @@ async function loadAndRenderCastings() {
     // the user visits the Tracking tab.
     await Promise.all([
         loadAllInventoryForCurrentProject(),
-        loadAllComponentsForCurrentProject(),
-        loadTypeMaster(currentProjectNumber)
+        loadAllComponentsForCurrentProject()
     ]);
     // First time visiting this project's Castings tab in this session: seed
     // every casting as expanded EXCEPT those with more than the threshold of
@@ -1342,14 +1338,16 @@ function updateCastingsSummary() {
         return;
     }
     // Panels entered in inventory, grouped by component type.
+    // The count per type is the REGULAR quantity; extras are kept apart and shown beside it, never added in
+    // (PMs need the regular count at a glance; 2026-11-11 later).
     const totalByType = new Map();
-    const extrasByType = new Map();   // how many of each type's total are extras (2026-11-11)
+    const extrasByType = new Map();   // extras of each type, shown as "+ N extras"
     let totalPanels = 0;
     let totalExtras = 0;
     for (const c of currentCastings) {
         for (const it of getInventoryFor(c.id)) {
             const extras = parseInt(it.extras, 10) || 0;
-            const qty = (parseInt(it.quantity, 10) || 0) + extras;
+            const qty = parseInt(it.quantity, 10) || 0;
             const key = (it.type || '').trim() || '(untyped)';
             totalByType.set(key, (totalByType.get(key) || 0) + qty);
             extrasByType.set(key, (extrasByType.get(key) || 0) + extras);
@@ -1368,17 +1366,17 @@ function updateCastingsSummary() {
             totalRejected++;
         }
     }
-    // `extras` (the inventory card only): each type also says how many of its total are extras.
+    // `extras` (the inventory card only): each type also shows its extras as a separate "+ N extras".
     const gridByType = (m, extras = null) => [...m.entries()]
         .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
         .map(([type, n]) => {
             const x = extras ? (extras.get(type) || 0) : 0;
-            const tip = extras ? ` title="${escapeAttr(x ? `${type}: ${n - x} + ${x} extra${x === 1 ? '' : 's'} = ${n}` : `${type}: ${n}, no extras`)}"` : '';
+            const tip = extras ? ` title="${escapeAttr(x ? `${type}: ${n} + ${x} extra${x === 1 ? '' : 's'} = ${n + x} to cast` : `${type}: ${n}, no extras`)}"` : '';
             return `
             <span class="pp-cast-sum-item"${tip}>
                 <span class="pp-cast-sum-type">${escapeHtml(type)}</span>
                 <span class="pp-cast-sum-n">${n}</span>${x ? `
-                <span class="pp-cast-sum-x">incl. ${x} extra${x === 1 ? '' : 's'}</span>` : ''}
+                <span class="pp-cast-sum-x">+ ${x} extra${x === 1 ? '' : 's'}</span>` : ''}
             </span>`;
         })
         .join('');
@@ -1388,7 +1386,7 @@ function updateCastingsSummary() {
     const rejListEl = document.getElementById('pp-cast-sum-rejected-list');
     if (totalEl) totalEl.textContent = String(totalPanels);
     const extrasEl = document.getElementById('pp-cast-sum-extras');
-    if (extrasEl) extrasEl.textContent = totalExtras ? ` \u00b7 incl. ${totalExtras} extra${totalExtras === 1 ? '' : 's'}` : '';
+    if (extrasEl) extrasEl.textContent = totalExtras ? ` + ${totalExtras} extra${totalExtras === 1 ? '' : 's'}` : '';
     if (rejEl) rejEl.textContent = String(totalRejected);
     if (totalListEl) {
         totalListEl.innerHTML = totalByType.size ? gridByType(totalByType, extrasByType) : '';
@@ -1428,7 +1426,6 @@ function renderCastings() {
     if (!list || !empty || !needsSave || !addRow) return;
 
     updateCastingsSummary();
-    renderTypeMaster();
 
     const hasProject = !!currentProjectNumber;
     needsSave.hidden = hasProject;
@@ -1622,10 +1619,9 @@ function renderInventoryRow(item, castingId) {
                 </svg>
             </div>
             <div class="pp-inv-row-fields">
-                ${invCell(item.id, 'quantity', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'quantity')}" data-field="quantity" min="${typeMasterActive() ? 0 : 1}" step="1" value="${escapeAttr(item.quantity ?? 1)}"${invEditedTitle(item.id, 'quantity')} />`)}
+                ${invCell(item.id, 'quantity', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'quantity')}" data-field="quantity" min="1" step="1" value="${escapeAttr(item.quantity ?? 1)}"${invEditedTitle(item.id, 'quantity')} />`)}
                 ${invCell(item.id, 'extras', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'extras')}" data-field="extras" min="0" step="1" placeholder="0" value="${escapeAttr(item.extras ?? 0)}"${invEditedTitle(item.id, 'extras')} />`)}
-                ${invCell(item.id, 'type', typeCellHtml(item, `pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}`, invEditedTitle(item.id, 'type'))
-                    || `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}" data-field="type" placeholder="Type" value="${escapeAttr(item.type || '')}"${invEditedTitle(item.id, 'type')} />`)}
+                ${invCell(item.id, 'type', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}" data-field="type" placeholder="Type" value="${escapeAttr(item.type || '')}"${invEditedTitle(item.id, 'type')} />`)}
                 ${invCell(item.id, 'description', `<input type="text" class="pp-inv-input pp-inv-pm pp-inv-input-desc${invEditedCls(item.id, 'description')}" data-field="description" placeholder="Description" maxlength="120" value="${escapeAttr(item.description || '')}"${invEditedTitle(item.id, 'description') || (item.description ? ` title="${escapeAttr(item.description)}"` : '')} />`)}
                 ${invCell(item.id, 'width', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'width')}" data-field="width" placeholder="Width" value="${escapeAttr(item.width || '')}"${invEditedTitle(item.id, 'width')} />`)}
                 ${invCell(item.id, 'length', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'length')}" data-field="length" placeholder="Length" value="${escapeAttr(item.length || '')}"${invEditedTitle(item.id, 'length')} />`)}
@@ -2412,7 +2408,7 @@ async function handleAddInventoryItem(castingId) {
         renderCastings();
         // Focus the type input on the newest row
         const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
-        const last = card?.querySelector('.pp-inv-row:last-of-type [data-field="type"]');   // text box, or the type dropdown of a job with a master list
+        const last = card?.querySelector('.pp-inv-row:last-of-type input[data-field="type"]');
         last?.focus();
         ciEntered(castingId);
         syncTrackingFromInventory();
@@ -2424,10 +2420,9 @@ async function handleAddInventoryItem(castingId) {
 }
 
 function saveInventoryItem(itemId, castingId) { return trackSave(saveInventoryItemNow(itemId, castingId)); }
-const invOverAsking = new Set();   // rows whose "more than the master total" question is open
 async function saveInventoryItemNow(itemId, castingId) {
     const row = document.querySelector(`.pp-inv-row[data-inventory-id="${itemId}"]`);
-    if (!row || invOverAsking.has(itemId)) return;
+    if (!row) return;
     const casting = currentCastings.find(c => c.id === castingId);
     if (inventoryEditBlocked(casting)) { renderCastings(); return; }   // final (ready) inventory
     const list = getInventoryFor(castingId);
@@ -2438,10 +2433,9 @@ async function saveInventoryItemNow(itemId, castingId) {
     const fields = {};
     row.querySelectorAll('input[data-field], select[data-field]').forEach(input => {
         const field = input.dataset.field;
-        if (field === 'type' && input.value === TM_NEW) return;   // "+ Create a type" is a command, never a value
         if (field === 'quantity') {
             const n = parseInt(input.value, 10);
-            fields.quantity = (Number.isFinite(n) && n >= 1) ? n : (n === 0 ? 0 : 1);
+            fields.quantity = (Number.isFinite(n) && n >= 1) ? n : 1;
         } else if (field === 'extras') {
             const n = parseInt(input.value, 10);
             fields.extras = (Number.isFinite(n) && n >= 0) ? n : 0;
@@ -2462,9 +2456,6 @@ async function saveInventoryItemNow(itemId, castingId) {
         }
     });
 
-    // Quantity 0 only exists on an extras-only row of a job that has a type master list (2026-11-11).
-    if (fields.quantity === 0 && !(typeMasterActive() && fields.extras > 0)) fields.quantity = 1;
-
     // Diff against current state — skip the round-trip if nothing changed.
     const changed = {};
     for (const k of Object.keys(fields)) {
@@ -2473,21 +2464,6 @@ async function saveInventoryItemNow(itemId, castingId) {
         if (cur !== next) changed[k] = fields[k];
     }
     if (Object.keys(changed).length === 0) return;
-    // Type master list (2026-11-11): a quantity that takes a type past its job total is never saved silently.
-    if (('quantity' in changed || 'type' in changed) && typeMasterActive()) {
-        invOverAsking.add(itemId);
-        let verdict;
-        try { verdict = await typeMasterOverCheck(item, { ...item, ...changed }); } finally { invOverAsking.delete(itemId); }
-        if (verdict.action === 'cancel') { renderCastings(); return; }   // the stored values go back in the boxes
-        if (verdict.action === 'split') {
-            for (const [k, v] of [['quantity', verdict.quantity], ['extras', verdict.extras]]) {
-                if ((item[k] ?? null) === v) delete changed[k]; else changed[k] = v;
-                const box = row.querySelector(`[data-field="${k}"]`);
-                if (box) box.value = v;
-            }
-            if (Object.keys(changed).length === 0) return;
-        }
-    }
     // Count or type changes renumber panels: simulate first (2026-11-09). Colour, sealer, sizes, cu ft, sq ft never do.
     if (['quantity', 'extras', 'type'].some(k => k in changed)
         && inventoryEditBlocked(casting, sim => { const r = (sim.inv.get(castingId) || []).find(x => x.id === itemId); if (r) Object.assign(r, changed); })) {
@@ -2544,7 +2520,6 @@ function castingCountLabelHtml(items) {
 }
 
 function updateCastingInventoryCount(castingId) {
-    refreshTypeMasterStatus();   // the master list's "6 of 10 · 4 left" follows every saved quantity
     const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
     if (!card) return;
     const countEl = card.querySelector('.pp-cast-card-count');
@@ -5465,15 +5440,13 @@ function updateMsFloat() {
     if (panel.style.paddingTop !== want) panel.style.paddingTop = want;
 }
 
-/** Numbered pieces of a row: at least 1, except an extras-only row (quantity 0 with extras), which numbers none (2026-11-11). */
-function invQtyOf(inv) { const n = parseInt(inv.quantity, 10); return (n === 0 && (parseInt(inv.extras, 10) || 0) > 0) ? 0 : Math.max(1, n || 1); }
 /** Panel ids every casting should have, from the inventory: Map casting id → expected rows (the Tracking mirror). */
 function expectedPanelsFor(castingsInOrder, invOf) {
     const typeTotals = new Map();
     for (const casting of castingsInOrder) {
         for (const inv of invOf(casting.id)) {
             if (!inv.type) continue;
-            const qty = invQtyOf(inv);
+            const qty = Math.max(1, parseInt(inv.quantity, 10) || 1);
             typeTotals.set(inv.type, (typeTotals.get(inv.type) || 0) + qty);
         }
     }
@@ -5489,7 +5462,7 @@ function expectedPanelsFor(castingsInOrder, invOf) {
     for (const casting of castingsInOrder) {
         const expected = [];
         for (const inv of invOf(casting.id)) {
-            const qty = invQtyOf(inv);
+            const qty = Math.max(1, parseInt(inv.quantity, 10) || 1);
             const extras = Math.max(0, parseInt(inv.extras, 10) || 0);
             // A remake row re-casts several rejected panels (one id per piece): each piece points back at its own one.
             const remakeIds = inv.remake_of_casting_id ? invRemakeIds(inv) : [];
@@ -10584,20 +10557,6 @@ function wireEvents() {
 
     // Castings: summary readout expand/collapse
     document.getElementById('pp-castings-summary')?.addEventListener('click', handleCastingsSummaryToggle);
-    // Type master list (2026-11-11): its own card + the type dropdown and cross-casting values of the rows below.
-    initTypeMaster({
-        // A phased job keeps one list per phase: the module only ever sees the active phase's castings.
-        castings: getCastingsForActivePhase,
-        scope: () => !currentPhasesEnabled ? { suffix: '', label: '' }
-            : (currentPhaseId ? { suffix: ':' + currentPhaseId, label: currentPhases.find(ph => ph.id === currentPhaseId)?.phase_name || '' } : null),
-        inventoryOf: getInventoryFor, colorLogs: () => currentColorLogs, colorSelectHtml: buildColorLogSelectHtml,
-        isFinal: ciLockedById, updateItem: updateInventoryItem, editBlocked: inventoryEditBlocked,
-        afterChange: (castingId) => { msInventoryChanged(castingId); updateCastingInventoryCount(castingId); },
-        syncTracking: syncTrackingFromInventory, renderCastings,
-        saveRow: (itemId, castingId) => { const t = inventorySaveTimers.get(itemId); if (t) clearTimeout(t); inventorySaveTimers.delete(itemId); saveInventoryItem(itemId, castingId); },
-        recordEdit: (el) => { invRecordEdit(el); el.dataset.before = el.value; el.dataset.beforeLabel = el.selectedOptions?.[0]?.text || ''; },
-        toast: showToast, escapeHtml, trackSave
-    });
 
     // Castings: row actions (delegation)
     const castingsList = document.getElementById('pp-castings-list');
@@ -10721,9 +10680,9 @@ function wireEvents() {
     castingsList.addEventListener('focusin', (e) => {
         if (!e.target.matches('.pp-inv-row[data-inventory-id] input[data-field], .pp-inv-row[data-inventory-id] select[data-field]')) return;
         e.target.dataset.before = e.target.value;
-        if (e.target.tagName === 'SELECT') e.target.dataset.beforeLabel = e.target.selectedOptions[0]?.dataset.short || e.target.selectedOptions[0]?.text || '';
+        if (e.target.tagName === 'SELECT') e.target.dataset.beforeLabel = e.target.selectedOptions[0]?.text || '';
     });
-    castingsList.addEventListener('focusout', (e) => { if (e.target.matches?.('select[data-field="type"]')) return; invRecordEdit(e.target); });
+    castingsList.addEventListener('focusout', (e) => { invRecordEdit(e.target); });
     castingsList.addEventListener('focusout', (e) => {
         if (!e.target.matches('.pp-cast-card-header input[data-field="casting_number"], .pp-cast-card-header input[data-field="description"]')) return;
         const id = e.target.closest('.pp-cast-card[data-casting-id]')?.getAttribute('data-casting-id');
@@ -10752,7 +10711,6 @@ function wireEvents() {
         if (!e.target.matches('select[data-field]')) return;
         const invRow = e.target.closest('.pp-inv-row[data-inventory-id]');
         if (!invRow) return;
-        if (e.target.dataset.field === 'type') return;   // the type dropdown commits through type-master.js (fills the row first)
         invRecordEdit(e.target);
         e.target.dataset.before = e.target.value;
         e.target.dataset.beforeLabel = e.target.selectedOptions[0]?.text || '';

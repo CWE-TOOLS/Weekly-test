@@ -16,7 +16,6 @@
 <head>
 <script>
 (function () {
-  window.__TYPE_MASTER_PREFIX = 'type_master_test:';   // test-site master lists never become a real job's list
   var realFetch = window.fetch.bind(window);
   var TEST_SHEET = '';
   var MILL_MOVES = [];   // preview only: [job, cast, day] Mill staging notes shown as Parts (the real rename runs after the sheet swap)   // set when this copy reads a different Google Sheet: it must not share the live cache
@@ -93,7 +92,7 @@
     var bar = document.createElement('div');
     bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
       'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
-    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. The Type master list saves too, in a test-only copy. Everything else resets on refresh.</span>' +
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. Everything else resets on refresh.</span>' +
       '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
     document.body.appendChild(bar);
   });
