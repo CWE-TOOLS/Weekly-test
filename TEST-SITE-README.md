@@ -1,5 +1,5 @@
 # Weekly-test
 
-Read-only TEST copy of the portal, built from branch `dummy-mode` at `de132c4`.
+Read-only TEST copy of the portal, built from branch `dummy-mode` at `7ecbd2f`.
 Every page carries a guard that blocks saves to the real database except the few tables listed in the red bar.
 The real portal is https://cwe-tools.github.io/Weekly/ — this site is for trying changes before they are published.
