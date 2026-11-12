@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "weekly-schedule",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["live-server", "--no-browser"],
+      "autoPort": true
+    },
+    {
+      "name": "docs",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/dev-server.ps1", "-Port", "8642"],
+      "port": 8642
+    }
+  ]
+}

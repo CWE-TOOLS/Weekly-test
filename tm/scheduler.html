@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  window.__TYPE_MASTER_PREFIX = 'type_master_test:';   // test-site master lists never become a real job's list
+  var realFetch = window.fetch.bind(window);
+  var TEST_SHEET = '';
+  var MILL_MOVES = [];   // preview only: [job, cast, day] Mill staging notes shown as Parts (the real rename runs after the sheet swap)   // set when this copy reads a different Google Sheet: it must not share the live cache
+  // Diagnostics: name any element / XHR request that fails, since the pane's console hides the URL.
+  window.addEventListener('error', function (e) {
+    var t = e.target; var u = t && (t.src || t.href);
+    if (u) console.warn('[test copy] resource failed: ' + (t.tagName || '?') + ' ' + u);
+  }, true);
+  var xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    this.addEventListener('loadend', function () { if (this.status >= 400) console.warn('[test copy] XHR ' + this.status + ' ' + m + ' ' + String(u).slice(0, 200)); });
+    return xo.apply(this, arguments);
+  };
+  var blocked = 0;
+  // Rows that belong to the 0860 "Test" casting (inventory / components), learned from what the database returns:
+  // edits and deletes of those rows save for real too, so an Import Remakes there can be tried and cleaned up.
+  var testRows = {};
+  function learn(url, res) {
+    if (!/\/rest\/v1\/(casting_inventory|casting_components)/i.test(url) || !res || !res.ok) return res;
+    try { res.clone().json().then(function (j) { (Array.isArray(j) ? j : [j]).forEach(function (r) { if (r && r.casting_id === '1a836a86-2709-4447-b604-d8e8a887bd0b' && r.id) testRows[r.id] = 1; }); }).catch(function () {}); } catch (e) {}
+    return res;
+  }
+  // Crates and crate assignments are LET THROUGH (they hit the real database) so trucks/crates can be tried here.
+  function isWrite(url, method, body) {
+    method = (method || 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+    if (/\/rest\/v1\/project_crates/i.test(url)) return false;
+    if (/\/rest\/v1\/plant_schedule/i.test(url)) return false;
+    if (/\/rest\/v1\/finishing_map/i.test(url)) return false;   // the Finishing Map's own table (preview) — nothing else reads it   // the scheduler's own tables (preview) — nothing else reads them
+    if (/\/rest\/v1\/casting_milestones/i.test(url)) return false;   // board milestones + inventory lock save for real
+    if (/1a836a86-2709-4447-b604-d8e8a887bd0b|7a0554ad-5beb-4b73-83d7-c775f8ceff10/i.test(url + ' ' + String(body || '')) && /\/rest\/v1\/(batch_tickets|project_castings|casting_inventory|casting_components)/i.test(url)) return false;   // 0860 "Test" casting: saves for real so live refresh can be tried
+    if (/\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) return false;   // shared Google Sheets cache: same data whoever refreshes it; without this the board waits 30 s on a stale cache
+    if (/\/rest\/v1\/casting_components/i.test(url) && /"crate_id"/.test(String(body || ''))) return false;
+    if (/\/rest\/v1\/(casting_inventory|casting_components)/i.test(url)) { var hay = url + ' ' + String(body || ''); for (var id in testRows) if (hay.indexOf(id) >= 0) return false; }   // rows of the "Test" casting
+    return /\.supabase\.co\//i.test(url) || /sheets\.googleapis\.com|script\.google\.com/i.test(url);
+  }
+  window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    if (TEST_SHEET && /\/rest\/v1\/(sheets_cache|sheets_cache_status|rpc\/acquire_cache_update_lock|rpc\/release_cache_update_lock)/i.test(url)) {
+      // Different sheet than live: never read or write the shared sheets_cache. Reads miss, the lock is always "ours", writes vanish.
+      if (/acquire_cache_update_lock/i.test(url)) return Promise.resolve(new Response('true', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      if (/release_cache_update_lock/i.test(url)) return Promise.resolve(new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      if ((method || 'GET').toUpperCase() === 'GET') return Promise.resolve(new Response('{"code":"PGRST116","message":"test copy reads its own sheet, no shared cache"}', { status: 406, headers: { 'Content-Type': 'application/json' } }));
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    var bodyText = (init && typeof init.body === 'string') ? init.body : '';
+    if (!isWrite(url, method, bodyText)) return realFetch(input, init).then(function (res) {
+      learn(url, res);
+      if (MILL_MOVES.length && (method || 'GET').toUpperCase() === 'GET' && /\/rest\/v1\/task_descriptions/i.test(url) && res && res.ok) {
+        return res.clone().json().then(function (j) {
+          var list = Array.isArray(j) ? j : [j]; var n = 0;
+          var urlPn = (decodeURIComponent(url).match(/project_number=eq\.([^&]+)/) || [])[1] || '';   // the portal's per-job query does not select project_number
+          list.forEach(function (r) { var pn = r && (r.project_number || urlPn); if (r && r.department === 'Mill' && MILL_MOVES.some(function (m) { return m[0] === pn && m[1] === r.casting_number && m[2] === String(r.day_number); })) { r.department = 'Parts'; n++; } });
+          if (n) console.info('[test copy] preview: ' + n + ' Mill staging notes shown as Parts');
+          var hh = { 'Content-Type': 'application/json' }; var cr = res.headers.get('content-range'); if (cr) hh['Content-Range'] = cr;
+          return new Response(JSON.stringify(j), { status: res.status, headers: hh });
+        }).catch(function () { return res; });
+      }
+      if (res && res.status >= 400) console.warn('[test copy] HTTP ' + res.status + ' from ' + method + ' ' + url.split('?')[0] + ' ?' + (url.split('?')[1] || '').slice(0, 160));
+      return res;
+    });
+    blocked++;
+    var badge = document.getElementById('ro-test-count');
+    if (badge) badge.textContent = blocked + ' save' + (blocked === 1 ? '' : 's') + ' blocked';
+    console.info('[read-only test copy] blocked', method, url.split('?')[0]);
+    var prefer = '';
+    try { var h = new Headers((init && init.headers) || (input && input.headers) || {}); prefer = h.get('Prefer') || ''; } catch (e) {}
+    var wantsRows = /return=representation/i.test(prefer);
+    return Promise.resolve(new Response(wantsRows ? '[]' : null, {
+      status: wantsRows ? 200 : 204, headers: { 'Content-Type': 'application/json' } }));
+  };
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
+      'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. The Type master list saves too, in a test-only copy. Everything else resets on refresh.</span>' +
+      '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
+    document.body.appendChild(bar);
+  });
+})();
+</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plant Scheduler - Weekly Schedule</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E🗓️%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="src/styles/variables.css">
+    <link rel="stylesheet" href="src/styles/base.css">
+    <link rel="stylesheet" href="src/styles/buttons.css">
+    <link rel="stylesheet" href="src/styles/scheduler.css?v=20261029-9">
+</head>
+<body>
+<div id="sc-app">
+    <header class="sc-top">
+        <div class="sc-top-left">
+            <a href="index.html" class="sc-nav">&larr; Weekly Schedule</a>
+            <a href="project-portal.html" class="sc-nav">Project Portal</a>
+            <a href="releasability.html" class="sc-nav">Releasability Board</a>
+            <h1 class="sc-title">Plant Scheduler <span class="sc-badge" id="sc-badge">PREVIEW — the weekly still reads the Google Sheet Optimizers</span></h1>
+        </div>
+        <div class="sc-top-right">
+            <input type="search" id="sc-search" placeholder="Search job # or name…" autocomplete="off">
+            <button type="button" class="btn-secondary" id="sc-prev" title="Previous month">&lsaquo;</button>
+            <span id="sc-month-label" class="sc-month">—</span>
+            <button type="button" class="btn-secondary" id="sc-next" title="Next month">&rsaquo;</button>
+            <button type="button" class="btn-secondary" id="sc-today" title="Jump to today's column">Today</button>
+            <label class="sc-ctl"><input type="checkbox" id="sc-show-weekends"> Show Sundays</label>
+            <label class="sc-ctl sc-ctl-cascade" title="When on, moving a task (drag or the Move button) also moves every later task of that casting by the same number of working days. Holding Shift while dropping does the same for one drag."><input type="checkbox" id="sc-cascade"> Cascade moves</label>
+            <button type="button" class="btn-primary" id="sc-view-toggle" title="Flip between the schedule grid and the revenue table">Revenue</button>
+            <button type="button" class="btn-secondary" id="sc-select-btn" title="Pick several tasks (any castings, any days) and move them all to one day. Ctrl+click a task does the same without this button.">Select tasks</button>
+            <button type="button" class="btn-secondary" id="sc-undo" disabled title="Nothing to undo">&#8630; Undo</button>
+            <button type="button" class="btn-secondary" id="sc-redo" disabled title="Nothing to redo">&#8631; Redo</button>
+            <button type="button" class="btn-secondary" id="sc-settings-btn">Settings</button>
+            <button type="button" class="btn-secondary" id="sc-print" title="Print the grid">Print</button>
+        </div>
+    </header>
+
+    <div id="sc-banner" class="sc-banner" hidden></div>
+    <div id="sc-selbar" class="sc-selbar" hidden>
+        <span id="sc-sel-count" class="sc-sel-count"></span>
+        <label class="sc-sel-to">Move all to <input type="date" id="sc-sel-date"></label>
+        <button type="button" class="btn-primary" id="sc-sel-move">Move</button>
+        <button type="button" class="btn-danger" id="sc-sel-delete" title="Delete every selected task (one Undo brings them back)">Delete</button>
+        <button type="button" class="btn-secondary" id="sc-sel-clear" title="Clear the selection (Esc)">Clear</button>
+    </div>
+
+    <div class="sc-body">
+        <aside class="sc-side">
+            <div class="sc-side-head">
+                <strong>Not yet scheduled</strong>
+                <span class="sc-hint">Castings a PM marked "Ready for scheduling" on the portal's Optimizer Hours tab, that have a Casting Inventory and no days on the grid yet. Hours come from the Optimizer Hours tab. Schedule = spread those tasks from the cast date.</span>
+            </div>
+            <input type="search" id="sc-uns-search" class="sc-uns-search" placeholder="Search not-scheduled jobs…" autocomplete="off">
+            <div id="sc-uns-count" class="sc-hint"></div>
+            <div id="sc-unscheduled" class="sc-unscheduled"></div>
+            <div class="sc-side-head">
+                <strong>How the spread works</strong>
+                <span class="sc-hint">The Staging tab sets each casting's days and the task of every day; the Optimizer Hours tab adds the hours per day. The scheduler lays those days out as they are, so the grid always totals exactly the hours entered. A casting still on its previous task list is spread over its staging days instead. Build Crate always lands on a Monday (move it by hand if it must be elsewhere). The Cast team lands on the cast date; earlier phases run back from it, later ones forward. Weekends are skipped unless you allow one; holidays are never used.</span>
+            </div>
+        </aside>
+        <main class="sc-main">
+            <div id="sc-grid-wrap" class="sc-grid-wrap">
+                <div class="sc-loading">Loading…</div>
+            </div>
+        </main>
+    </div>
+
+    <!-- cell editor -->
+    <div id="sc-editor" class="sc-editor" hidden></div>
+
+    <!-- settings panel -->
+    <div id="sc-settings" class="sc-panel-backdrop" hidden>
+        <div class="sc-panel" role="dialog" aria-modal="true" aria-labelledby="sc-settings-title">
+            <div class="sc-panel-head"><h2 id="sc-settings-title">Scheduler settings</h2><button type="button" class="sc-x" data-close>&times;</button></div>
+            <div class="sc-panel-body">
+                <h3>Weekly board reads from</h3>
+                <p class="sc-hint">Which schedule the weekly board (and the Releasability Board) shows. Switching takes effect on every open screen within seconds; switching back is the same click.</p>
+                <div class="sc-source-pick">
+                    <label><input type="radio" name="sc-source" value="sheet"> <b>Google Sheet Optimizers</b> <small>— the Excel/Sheet chain as today (Primary Live List 2)</small></label>
+                    <label><input type="radio" name="sc-source" value="scheduler"> <b>Plant Scheduler</b> <small>— this page's schedule; the Sheet Optimizers are no longer read</small></label>
+                </div>
+                <p class="sc-hint" id="sc-source-note"></p>
+                <h3>Crew by team</h3>
+                <p class="sc-hint">Leader and people of each team. The Task mover offers these names; anyone can be borrowed by another team for a day.</p>
+                <div id="sc-crew" class="sc-crew-table"></div>
+                <h3>Holidays (never scheduled)</h3>
+                <p class="sc-hint">One date per line, YYYY-MM-DD.</p>
+                <textarea id="sc-holidays" rows="8"></textarea>
+            </div>
+            <div class="sc-panel-foot">
+                <button type="button" class="btn-secondary" data-close>Cancel</button>
+                <button type="button" class="btn-primary" id="sc-settings-save">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- schedule: next available cast day or choose one -->
+    <div id="sc-sched" class="sc-panel-backdrop" hidden></div>
+
+    <div id="sc-toast" class="sc-toast" hidden></div>
+</div>
+<script type="module" src="src/pages/scheduler/scheduler-page.js?v=20261103-2"></script>
+</body>
+</html>
