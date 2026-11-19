@@ -147,7 +147,7 @@ import {
 } from '../../services/casting-layout-service.js';
 import { registerRefreshHandler, isPortalChange, isOwnSignal, signalInfo } from '../../services/supabase-service.js';
 // Type master list (2026-11-11): the job's types + totals above the castings; casting rows pick their type from it.
-import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, TM_NEW } from './type-master.js?v=20261116-1';
+import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, TM_NEW } from './type-master.js?v=20261119-2';
 import { initInventorySearch, renderInventorySearch } from './inventory-search.js?v=20261116-1';
 import '../../utils/number-wheel-guard.js';   // the mouse wheel must not change a focused hour box (user 2026-11-03)
 
@@ -435,7 +435,7 @@ window.addEventListener('beforeunload', (e) => {
     if (invEdits.size) { e.preventDefault(); e.returnValue = ''; }
 });
 let inventorySaveTimers = new Map();       // itemId -> debounce handle
-let copiedComponents = null;               // Array<{type,width,length,color,sealer,quantity,extras,cu_ft,ff_sq_ft}> from a copy action
+let copiedComponents = null;               // Array<{type,width,length,color,sealer,quantity,extras,cu_ft,ff_sq_ft}> from a copy action (a CUT remake row also carries remake_of_panel_id + remake_of_casting_id)
 const invSelected = new Set();             // inventory row ids ticked for "Copy / Cut selected" (2026-10-13) and "colour the selected" (2026-10-29); only for this screen
 let invLastTick = null;                    // { castingId, id } of the last tick box clicked without Shift — Shift+click ticks the range from it
 function invSelectedIn(castingId) { return getInventoryFor(castingId).filter(it => invSelected.has(it.id)); }
@@ -1526,6 +1526,7 @@ function renderCastingCard(c) {
               <div class="pp-cast-card-line2">
                 ${castDayPillHtml(c)}
                 <span class="pp-cast-card-count">${countLabel}</span>
+                ${castingProjPillHtml(items)}
                 <div class="pp-cast-card-actions">
                     <button class="pp-row-btn pp-row-btn-word" data-action="copy-components" type="button" ${copyDisabled ? 'disabled' : ''} title="${escapeAttr(copyTitle)}">${copyLabel}</button>
                     ${cutBtn}
@@ -1557,7 +1558,7 @@ function renderInventoryBody(casting, items) {
         : items.map(item => renderInventoryRow(item, casting.id)).join('');
 
     const headerRow = `
-        <div class="pp-inv-legend"><span class="pp-inv-legend-pm" title="Qty, Extras, Type, Description, Width, Length, Color, Remake Of — the PM enters these, then presses Ready for engineering">PM fields</span><span class="pp-inv-legend-eng" title="Cu Ft, FF Sq Ft — engineering enters these, then presses Casting Inventory ready">Engineering fields</span></div>
+        <div class="pp-inv-legend"><span class="pp-inv-legend-pm" title="Qty, Extras, Type, Description, Width, Length, Color, Remake Of — the PM enters these, then presses Ready for engineering. Proj Sq Ft is worked out from them by itself.">PM fields</span><span class="pp-inv-legend-eng" title="Cu Ft, FF Sq Ft — engineering enters these, then presses Casting Inventory ready">Engineering fields</span></div>
         <div class="pp-inv-header-row">
             <input type="checkbox" class="pp-inv-row-select pp-inv-select-all" data-select-all aria-label="Select every component on this casting" title="Select all / none" ${items.length && items.every(it => invSelected.has(it.id)) ? 'checked' : ''} ${items.length ? '' : 'disabled'}>
             <div class="pp-inv-header-grip-spacer"></div>
@@ -1568,6 +1569,7 @@ function renderInventoryBody(casting, items) {
                 <span class="pp-inv-h-pm" title="A short description of the part, for example: flat. Tick several rows (Shift+click for a range), then type it on any ticked row: it goes on all of them. It prints on the tracking sheet.">Description</span>
                 <span class="pp-inv-h-pm">Width</span>
                 <span class="pp-inv-h-pm">Length</span>
+                <span class="pp-inv-h-pm pp-inv-h-proj" title="Projected square feet: Width x Length (inches) / 144 x (Qty + Extras). Worked out by itself, nothing to type. It is the PM's early estimate; batching uses only the engineering Cu Ft and FF Sq Ft.">Proj Sq Ft</span>
                 <span class="pp-inv-h-pm" title="Tick several rows (Shift+click for a range), then pick the colour on any ticked row: it goes on all of them.">Color</span>
                 <span class="pp-inv-header-num pp-inv-h-eng">Cu Ft</span>
                 <span class="pp-inv-header-num pp-inv-h-eng">FF Sq Ft</span>
@@ -1671,6 +1673,7 @@ function renderInventoryRow(item, castingId) {
                 ${invCell(item.id, 'description', `<input type="text" class="pp-inv-input pp-inv-pm pp-inv-input-desc${invEditedCls(item.id, 'description')}" data-field="description" placeholder="Description" maxlength="120" value="${escapeAttr(item.description || '')}"${invEditedTitle(item.id, 'description') || (item.description ? ` title="${escapeAttr(item.description)}"` : '')} />`)}
                 ${invCell(item.id, 'width', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'width')}" data-field="width" placeholder="Width" value="${escapeAttr(item.width || '')}"${invEditedTitle(item.id, 'width')} />`)}
                 ${invCell(item.id, 'length', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'length')}" data-field="length" placeholder="Length" value="${escapeAttr(item.length || '')}"${invEditedTitle(item.id, 'length')} />`)}
+                ${invProjCellHtml(item)}
                 ${invCell(item.id, 'color_log_id', buildColorLogSelectHtml(item.color_log_id, {
                     className: 'pp-inv-input pp-inv-pm pp-inv-color-select' + invEditedCls(item.id, 'color_log_id'),
                     dataAttrs: { 'data-field': 'color_log_id' }
@@ -2580,10 +2583,55 @@ function castingCountLabelHtml(items) {
     return `${items.length} ${items.length === 1 ? 'type' : 'types'} · ${totalQty} pcs · ${part('cu_ft', 'cu ft')} · ${part('ff_sq_ft', 'ff sq ft')}`;
 }
 
+// ---------- Projected Sq Ft (2026-11-19) ----------
+// The PM's early estimate, before engineering has the 3D numbers: Width x Length (inches, any way they are typed:
+// 60, 60.5, 60 1/2, 60-1/2") / 144 x (Qty + Extras). Worked out on screen from the PM's own fields; nothing is stored
+// and nothing else reads it. Batching keeps using only the engineering Cu Ft and FF Sq Ft.
+/** @returns {{sqft:number, w:number, l:number, units:number}|null} null while a size is missing or cannot be read */
+function invProjected(item) {
+    const w = parseDimension(item?.width), l = parseDimension(item?.length);
+    if (!(w > 0) || !(l > 0)) return null;
+    const units = (parseInt(item.quantity, 10) || 0) + (parseInt(item.extras, 10) || 0);
+    return { sqft: w * l / 144 * units, w, l, units };
+}
+function invProjCellHtml(item) {
+    const p = invProjected(item);
+    if (!p) return `<span class="pp-inv-input pp-inv-pm pp-inv-proj-cell pp-inv-proj-none" data-proj-cell title="Projected sq ft needs a Width and a Length (inches)">&mdash;</span>`;
+    const extras = parseInt(item.extras, 10) || 0;
+    const tip = `${roundSig(p.w, 3)} x ${roundSig(p.l, 3)} in = ${roundSig(p.w * p.l / 144, 2)} sq ft each x ${p.units} pc${p.units === 1 ? '' : 's'}${extras ? ` (${p.units - extras} + ${extras} extra${extras === 1 ? '' : 's'})` : ''} = ${roundSig(p.sqft, 2)} sq ft. Worked out by itself, nothing to type.`;
+    return `<span class="pp-inv-input pp-inv-pm pp-inv-proj-cell" data-proj-cell title="${escapeAttr(tip)}">${escapeHtml(String(roundSig(p.sqft, 2)))}</span>`;
+}
+/** The title-block bubble: the casting's projected sq ft, flagged while some rows have no size yet. */
+function castingProjPillHtml(items) {
+    if (!items.length) return '';
+    const done = items.map(invProjected);
+    const total = done.reduce((sum, p) => sum + (p ? p.sqft : 0), 0);
+    const missing = done.filter(p => !p).length;
+    if (missing === items.length) {
+        return `<span class="pp-cast-card-proj pp-cast-card-proj-none" data-cast-proj title="Projected sq ft is worked out from Width, Length, Qty and Extras. No component on this casting has a Width and a Length yet.">projected sq ft: no sizes yet</span>`;
+    }
+    const tip = 'Projected sq ft: Width x Length / 144 x (Qty + Extras), added up over this casting. The PM\u2019s early estimate; batching uses only the engineering Cu Ft and FF Sq Ft.'
+        + (missing ? ` ${missing} of ${items.length} component${items.length === 1 ? '' : 's'} ${missing === 1 ? 'has' : 'have'} no Width or Length, so this total is incomplete.` : '');
+    return `<span class="pp-cast-card-proj${missing ? ' pp-cast-card-proj-warn' : ''}" data-cast-proj title="${escapeAttr(tip)}">projected ${escapeHtml(String(roundSig(total, 2)))} sq ft${missing ? ' &#9888; incomplete' : ''}</span>`;
+}
+/** After a saved edit: the projected cells of the casting's rows and its bubble follow, without a full redraw. */
+function refreshCastingProjected(card, castingId) {
+    const items = getInventoryFor(castingId);
+    for (const item of items) {
+        const cell = card.querySelector(`.pp-inv-row[data-inventory-id="${item.id}"] [data-proj-cell]`);
+        if (cell) cell.outerHTML = invProjCellHtml(item);
+    }
+    const pill = card.querySelector('[data-cast-proj]');
+    const html = castingProjPillHtml(items);
+    if (pill) { if (html) pill.outerHTML = html; else pill.remove(); }
+    else if (html) card.querySelector('.pp-cast-card-count')?.insertAdjacentHTML('afterend', html);
+}
+
 function updateCastingInventoryCount(castingId) {
     refreshTypeMasterStatus();   // the master list's "6 of 10 · 4 left" follows every saved quantity
     const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
     if (!card) return;
+    refreshCastingProjected(card, castingId);
     const countEl = card.querySelector('.pp-cast-card-count');
     if (!countEl) return;
     countEl.innerHTML = castingCountLabelHtml(getInventoryFor(castingId));
@@ -4763,7 +4811,11 @@ async function cutInventoryItems(castingId, items, label) {
     if (!items.length) return;
     const cutIds = new Set(items.map(it => it.id));
     if (inventoryEditBlocked(casting, sim => { sim.inv.set(castingId, (sim.inv.get(castingId) || []).filter(x => !cutIds.has(x.id))); })) return;
-    copiedComponents = items.map(inventoryClipItem);
+    // A CUT remake row stays a remake where it is pasted (2026-11-19): it carries the rejected panels it re-casts.
+    // Copy never does: the row stays where it was, and the same rejected panel cannot be re-cast twice.
+    copiedComponents = items.map(it => it.remake_of_casting_id && invRemakeIds(it).length
+        ? { ...inventoryClipItem(it), remake_of_panel_id: invRemakeIds(it).join(','), remake_of_casting_id: it.remake_of_casting_id }
+        : inventoryClipItem(it));
     try {
         for (const it of items) {
             const t = inventorySaveTimers.get(it.id);
@@ -4826,6 +4878,29 @@ async function handlePasteComponents(targetCastingId) {
         if (masterVerdict.action === 'cancel') return;
         clip = masterVerdict.items;
     }
+    // Remake rows that were CUT keep their "Remake Of" link (2026-11-19), panel by panel, while the link still holds:
+    // the panel is not re-cast by another row already (the same clipboard pasted twice, or imported somewhere in
+    // between) and this casting comes after the cast the panel was rejected in (the Import Remakes rule).
+    const linkNote = { kept: 0, lost: 0 };
+    {
+        const taken = importedRemakeKeys();
+        const targetOrder = targetCasting?.sort_order ?? -Infinity;
+        clip = clip.map(src => {
+            if (!src.remake_of_casting_id) return src;
+            const from = currentCastings.find(c => c.id === src.remake_of_casting_id);
+            const after = !!from && (from.sort_order ?? -Infinity) < targetOrder;
+            const ids = invRemakeIds(src);
+            const keep = ids.filter(id => {
+                const key = `${src.remake_of_casting_id}::${id}`;
+                if (!after || taken.has(key)) return false;
+                taken.add(key);
+                return true;
+            });
+            linkNote.kept += keep.length;
+            linkNote.lost += ids.length - keep.length;
+            return { ...src, remake_of_panel_id: keep.join(',') || null, remake_of_casting_id: keep.length ? src.remake_of_casting_id : null };
+        });
+    }
     if (inventoryEditBlocked(targetCasting, sim => {
         const rows = sim.inv.get(targetCastingId) || []; for (const it of clip) rows.push({ ...it, id: null }); sim.inv.set(targetCastingId, rows);
     })) return;
@@ -4845,7 +4920,9 @@ async function handlePasteComponents(targetCastingId) {
         renderCastings();
         const target = currentCastings.find(c => c.id === targetCastingId);
         const n = inserted.filter(Boolean).length;
-        showToast(`Pasted ${n} component${n === 1 ? '' : 's'} into Cast ${target?.casting_number || ''}.`);
+        const linkText = (linkNote.kept ? ` Remake link kept for ${linkNote.kept} panel${linkNote.kept === 1 ? '' : 's'}.` : '')
+            + (linkNote.lost ? ` ${linkNote.lost} panel${linkNote.lost === 1 ? '' : 's'} went in WITHOUT the remake link (already a remake somewhere else, or this casting is not after the cast they were rejected in).` : '');
+        showToast(`Pasted ${n} component${n === 1 ? '' : 's'} into Cast ${target?.casting_number || ''}.${linkText}`, linkNote.lost ? 'error' : undefined, linkNote.lost ? 9000 : undefined);
         if (n) ciEntered(targetCastingId);
         syncTrackingFromInventory();
         msInventoryChanged(targetCastingId);
