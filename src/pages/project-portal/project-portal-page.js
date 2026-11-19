@@ -111,7 +111,7 @@ import {
     roundSig,
     FROM_LBS
 } from '../../utils/batch-calc.js';
-import { getSpecialBatching } from '../../config/special-batching.js?v=20261109-1';
+import { getSpecialBatching } from '../../config/special-batching.js?v=20261119-1';
 import { fetchAllTasks } from '../../services/data-service.js';
 import { loadActualHoursForProject } from '../../services/actual-hours-service.js';
 import { parseDate } from '../../utils/date-utils.js';
@@ -131,9 +131,9 @@ import {
 import { renderCastingLayout, computeLayoutRects, parseDimension, tableBlockRects, CASTING_AREAS } from './casting-layout.js?v=20261112-1';
 import { attachLayoutDrag } from './casting-layout-drag.js?v=20261112-1';
 import { activateJigListTab } from './jig-list.js?v=20261112-1';
-import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js?v=20261106-1';
+import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js?v=20261119-1';
 import { SLUMP_TARGET_DEFAULTS, FINAL_BACKUP_PIG_REDUCTION_PCT, parsePigReduction, BT_IMPORT_META, btOverrides, btImportStamp, btStampDate, additiveAmount, batchTotalsRows, renderBatchTotals, clampSlumpTarget, formatSlumpLabel, renderSlumpGraphic, renderBatchTicketCard, BATCH_PRINT_CSS } from '../../services/batch-ticket-render.js';
-import { finishingProductsHtml, faceSqFtOfInventory } from '../../services/finishing-products.js?v=20261106-1';   // moved out 2026-10-30 so the weekly's week print shares the ticket code
+import { finishingProductsHtml, faceSqFtOfInventory, groutNotesHtml } from '../../services/finishing-products.js?v=20261119-1';   // moved out 2026-10-30 so the weekly's week print shares the ticket code
 import { invHash as invHashShared, invFingerprintRows, invColourFingerprintRows } from '../../services/inventory-marks.js';
 import { loadMilestonesForProject, saveMilestone, isMilestonesMigrationPending, loadLayoutConditions, loadLayoutConditionsForCastings, LAYOUT_CONDITION_PREFIX, layoutConditionNote, parseLayoutCondition, sideWords } from '../../services/milestones-service.js';
 import { loadJigListsForProject as loadJigListsForScrim, scrimForInventory } from '../../services/jig-list-service.js?v=20261112-1';
@@ -147,7 +147,7 @@ import {
 } from '../../services/casting-layout-service.js';
 import { registerRefreshHandler, isPortalChange, isOwnSignal, signalInfo } from '../../services/supabase-service.js';
 // Type master list (2026-11-11): the job's types + totals above the castings; casting rows pick their type from it.
-import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, TM_NEW } from './type-master.js?v=20261119-2';
+import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, TM_NEW } from './type-master.js?v=20261119-4';
 import { initInventorySearch, renderInventorySearch } from './inventory-search.js?v=20261116-1';
 import '../../utils/number-wheel-guard.js';   // the mouse wheel must not change a focused hour box (user 2026-11-03)
 
@@ -1450,6 +1450,7 @@ function renderCastings() {
     if (!list || !empty || !needsSave || !addRow) return;
 
     updateCastingsSummary();
+    renderApprovalsCard();
     renderTypeMaster();
     renderInventorySearch();
 
@@ -1526,6 +1527,7 @@ function renderCastingCard(c) {
               <div class="pp-cast-card-line2">
                 ${castDayPillHtml(c)}
                 <span class="pp-cast-card-count">${countLabel}</span>
+                ${castingProjPillHtml(items)}
                 <div class="pp-cast-card-actions">
                     <button class="pp-row-btn pp-row-btn-word" data-action="copy-components" type="button" ${copyDisabled ? 'disabled' : ''} title="${escapeAttr(copyTitle)}">${copyLabel}</button>
                     ${cutBtn}
@@ -1557,7 +1559,7 @@ function renderInventoryBody(casting, items) {
         : items.map(item => renderInventoryRow(item, casting.id)).join('');
 
     const headerRow = `
-        <div class="pp-inv-legend"><span class="pp-inv-legend-pm" title="Qty, Extras, Type, Description, Width, Length, Color, Remake Of — the PM enters these, then presses Ready for engineering">PM fields</span><span class="pp-inv-legend-eng" title="Cu Ft, FF Sq Ft — engineering enters these, then presses Casting Inventory ready">Engineering fields</span></div>
+        <div class="pp-inv-legend"><span class="pp-inv-legend-pm" title="Qty, Extras, Type, Description, Width, Length, Color, Remake Of — the PM enters these, then presses Ready for engineering. Proj Sq Ft is worked out from them by itself.">PM fields</span><span class="pp-inv-legend-eng" title="Cu Ft, FF Sq Ft — engineering enters these, then presses Casting Inventory ready">Engineering fields</span></div>
         <div class="pp-inv-header-row">
             <input type="checkbox" class="pp-inv-row-select pp-inv-select-all" data-select-all aria-label="Select every component on this casting" title="Select all / none" ${items.length && items.every(it => invSelected.has(it.id)) ? 'checked' : ''} ${items.length ? '' : 'disabled'}>
             <div class="pp-inv-header-grip-spacer"></div>
@@ -1568,6 +1570,7 @@ function renderInventoryBody(casting, items) {
                 <span class="pp-inv-h-pm" title="A short description of the part, for example: flat. Tick several rows (Shift+click for a range), then type it on any ticked row: it goes on all of them. It prints on the tracking sheet.">Description</span>
                 <span class="pp-inv-h-pm">Width</span>
                 <span class="pp-inv-h-pm">Length</span>
+                <span class="pp-inv-h-pm pp-inv-h-proj" title="Projected square feet: Width x Length (inches) / 144 x (Qty + Extras). Worked out by itself, nothing to type. It is the PM's early estimate; batching uses only the engineering Cu Ft and FF Sq Ft.">Proj Sq Ft</span>
                 <span class="pp-inv-h-pm" title="Tick several rows (Shift+click for a range), then pick the colour on any ticked row: it goes on all of them.">Color</span>
                 <span class="pp-inv-header-num pp-inv-h-eng">Cu Ft</span>
                 <span class="pp-inv-header-num pp-inv-h-eng">FF Sq Ft</span>
@@ -1671,6 +1674,7 @@ function renderInventoryRow(item, castingId) {
                 ${invCell(item.id, 'description', `<input type="text" class="pp-inv-input pp-inv-pm pp-inv-input-desc${invEditedCls(item.id, 'description')}" data-field="description" placeholder="Description" maxlength="120" value="${escapeAttr(item.description || '')}"${invEditedTitle(item.id, 'description') || (item.description ? ` title="${escapeAttr(item.description)}"` : '')} />`)}
                 ${invCell(item.id, 'width', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'width')}" data-field="width" placeholder="Width" value="${escapeAttr(item.width || '')}"${invEditedTitle(item.id, 'width')} />`)}
                 ${invCell(item.id, 'length', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'length')}" data-field="length" placeholder="Length" value="${escapeAttr(item.length || '')}"${invEditedTitle(item.id, 'length')} />`)}
+                ${invProjCellHtml(item)}
                 ${invCell(item.id, 'color_log_id', buildColorLogSelectHtml(item.color_log_id, {
                     className: 'pp-inv-input pp-inv-pm pp-inv-color-select' + invEditedCls(item.id, 'color_log_id'),
                     dataAttrs: { 'data-field': 'color_log_id' }
@@ -2580,10 +2584,55 @@ function castingCountLabelHtml(items) {
     return `${items.length} ${items.length === 1 ? 'type' : 'types'} · ${totalQty} pcs · ${part('cu_ft', 'cu ft')} · ${part('ff_sq_ft', 'ff sq ft')}`;
 }
 
+// ---------- Projected Sq Ft (2026-11-19) ----------
+// The PM's early estimate, before engineering has the 3D numbers: Width x Length (inches, any way they are typed:
+// 60, 60.5, 60 1/2, 60-1/2") / 144 x (Qty + Extras). Worked out on screen from the PM's own fields; nothing is stored
+// and nothing else reads it. Batching keeps using only the engineering Cu Ft and FF Sq Ft.
+/** @returns {{sqft:number, w:number, l:number, units:number}|null} null while a size is missing or cannot be read */
+function invProjected(item) {
+    const w = parseDimension(item?.width), l = parseDimension(item?.length);
+    if (!(w > 0) || !(l > 0)) return null;
+    const units = (parseInt(item.quantity, 10) || 0) + (parseInt(item.extras, 10) || 0);
+    return { sqft: w * l / 144 * units, w, l, units };
+}
+function invProjCellHtml(item) {
+    const p = invProjected(item);
+    if (!p) return `<span class="pp-inv-input pp-inv-pm pp-inv-proj-cell pp-inv-proj-none" data-proj-cell title="Projected sq ft needs a Width and a Length (inches)">&mdash;</span>`;
+    const extras = parseInt(item.extras, 10) || 0;
+    const tip = `${roundSig(p.w, 3)} x ${roundSig(p.l, 3)} in = ${roundSig(p.w * p.l / 144, 2)} sq ft each x ${p.units} pc${p.units === 1 ? '' : 's'}${extras ? ` (${p.units - extras} + ${extras} extra${extras === 1 ? '' : 's'})` : ''} = ${roundSig(p.sqft, 2)} sq ft. Worked out by itself, nothing to type.`;
+    return `<span class="pp-inv-input pp-inv-pm pp-inv-proj-cell" data-proj-cell title="${escapeAttr(tip)}">${escapeHtml(String(roundSig(p.sqft, 2)))}</span>`;
+}
+/** The title-block bubble: the casting's projected sq ft, flagged while some rows have no size yet. */
+function castingProjPillHtml(items) {
+    if (!items.length) return '';
+    const done = items.map(invProjected);
+    const total = done.reduce((sum, p) => sum + (p ? p.sqft : 0), 0);
+    const missing = done.filter(p => !p).length;
+    if (missing === items.length) {
+        return `<span class="pp-cast-card-proj pp-cast-card-proj-none" data-cast-proj title="Projected sq ft is worked out from Width, Length, Qty and Extras. No component on this casting has a Width and a Length yet.">projected sq ft: no sizes yet</span>`;
+    }
+    const tip = 'Projected sq ft: Width x Length / 144 x (Qty + Extras), added up over this casting. The PM\u2019s early estimate; batching uses only the engineering Cu Ft and FF Sq Ft.'
+        + (missing ? ` ${missing} of ${items.length} component${items.length === 1 ? '' : 's'} ${missing === 1 ? 'has' : 'have'} no Width or Length, so this total is incomplete.` : '');
+    return `<span class="pp-cast-card-proj${missing ? ' pp-cast-card-proj-warn' : ''}" data-cast-proj title="${escapeAttr(tip)}">projected ${escapeHtml(String(roundSig(total, 2)))} sq ft${missing ? ' &#9888; incomplete' : ''}</span>`;
+}
+/** After a saved edit: the projected cells of the casting's rows and its bubble follow, without a full redraw. */
+function refreshCastingProjected(card, castingId) {
+    const items = getInventoryFor(castingId);
+    for (const item of items) {
+        const cell = card.querySelector(`.pp-inv-row[data-inventory-id="${item.id}"] [data-proj-cell]`);
+        if (cell) cell.outerHTML = invProjCellHtml(item);
+    }
+    const pill = card.querySelector('[data-cast-proj]');
+    const html = castingProjPillHtml(items);
+    if (pill) { if (html) pill.outerHTML = html; else pill.remove(); }
+    else if (html) card.querySelector('.pp-cast-card-count')?.insertAdjacentHTML('afterend', html);
+}
+
 function updateCastingInventoryCount(castingId) {
     refreshTypeMasterStatus();   // the master list's "6 of 10 · 4 left" follows every saved quantity
     const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
     if (!card) return;
+    refreshCastingProjected(card, castingId);
     const countEl = card.querySelector('.pp-cast-card-count');
     if (!countEl) return;
     countEl.innerHTML = castingCountLabelHtml(getInventoryFor(castingId));
@@ -3075,16 +3124,37 @@ function renderOptStagedGrid(casting) {
 
 // ---------- Staging (pre-author task descriptions per casting, by department × day) ----------
 
-/* ===================== Releasability Approvals tab (2026-10-16) ===================== */
-async function activateApprovalsTab() {
-    const needsSave = document.getElementById('pp-appr-needs-save');
-    const noCastings = document.getElementById('pp-appr-no-castings');
-    const table = document.getElementById('pp-appr-table');
-    if (!table) return;
-    if (!currentProjectNumber) { needsSave.hidden = false; noCastings.hidden = true; table.innerHTML = ''; return; }
-    needsSave.hidden = true;
-    if (currentCastings.length === 0) { try { currentCastings = await loadCastings(currentProjectNumber); } catch (e) { /* ignore */ } }
-    if (!msByCasting.size && currentProjectNumber) await loadMilestones();
+/* ===================== Releasability approvals (2026-10-16; a box on the Casting Inventory tab since 2026-11-19) =====================
+   It used to be its own sidebar tab. Folded, the box shows each column with its "all done / clear all" button
+   and how many castings are done; open, it lists every casting to click one by one. It folds itself after
+   1 minute without work on it. What a click saves is unchanged (toggleApproval -> the casting_milestones row
+   the Releasability Board reads). */
+let apprOpen = false;
+let apprFoldTimer = null;
+const APPR_FOLD_AFTER_MS = 60000;
+function apprTouch() {
+    clearTimeout(apprFoldTimer);
+    apprFoldTimer = apprOpen ? setTimeout(() => apprSetOpen(false), APPR_FOLD_AFTER_MS) : null;
+}
+function apprSetOpen(on) {
+    apprOpen = !!on;
+    apprTouch();
+    const card = document.getElementById('pp-appr-card');
+    if (!card) return;
+    card.classList.toggle('pp-appr-open', apprOpen);
+    document.getElementById('pp-appr-toggle')?.setAttribute('aria-expanded', String(apprOpen));
+}
+/** Old entry point of the tab: kept so a stale call still draws the box. */
+async function activateApprovalsTab() { renderApprovalsCard(); }
+/** Draw the box on the Casting Inventory tab (hidden while the job has no castings to sign off). */
+function renderApprovalsCard() {
+    const card = document.getElementById('pp-appr-card');
+    if (!card) return;
+    const scoped = currentProjectNumber ? getCastingsForActivePhase() : [];
+    card.hidden = !scoped.length;
+    if (card.hidden) return;
+    card.classList.toggle('pp-appr-open', apprOpen);
+    document.getElementById('pp-appr-toggle')?.setAttribute('aria-expanded', String(apprOpen));
     renderApprovals();
 }
 function apprCellHtml(castingId, milestone) {
@@ -3100,16 +3170,18 @@ function apprCellHtml(castingId, milestone) {
 }
 function renderApprovals() {
     const table = document.getElementById('pp-appr-table');
-    const noCastings = document.getElementById('pp-appr-no-castings');
     if (!table) return;
     const scoped = getCastingsForActivePhase();
-    if (!scoped.length) { noCastings.hidden = false; table.innerHTML = ''; return; }
-    noCastings.hidden = true;
-    if (!msOn()) { table.innerHTML = '<div class="pp-castings-hint">This job is before the cut-off — its approvals are clicked on the Releasability Board.</div>'; return; }
+    const sub = document.getElementById('pp-appr-sub');
+    if (!scoped.length) { table.innerHTML = ''; return; }
+    if (!msOn()) { if (sub) sub.textContent = ''; table.innerHTML = '<div class="pp-castings-hint">This job is before the cut-off — its approvals are clicked on the Releasability Board.</div>'; return; }
+    if (sub) sub.textContent = 'PM sign-offs per casting. Click a cell to flip it; the Releasability Board follows.';
     const head = APPROVALS_TAB_ITEMS.map(m => {
         const auto = AUTO_MILESTONES.includes(m);
-        const allGreen = scoped.every(c => msStatus(c.id, m) === MS.GREEN);
+        const nGreen = scoped.filter(c => msStatus(c.id, m) === MS.GREEN).length;
+        const allGreen = nGreen === scoped.length;
         return `<th><span class="pp-appr-col-name">${escapeHtml(m)}</span><span class="pp-appr-col-tag ${auto ? 'pp-appr-tag-auto' : 'pp-appr-tag-pman'}">${auto ? 'AUTO' : 'P. MANUAL'}</span>
+            <span class="pp-appr-col-count${allGreen ? ' pp-appr-col-count-done' : ''}" title="Castings signed off for ${escapeAttr(m)}">${nGreen} of ${scoped.length} done</span>
             ${auto ? '' : `<button type="button" class="pp-appr-all" data-action="appr-all" data-milestone="${escapeAttr(m)}" data-to="${allGreen ? 'red' : 'green'}" title="${allGreen ? 'Clear every casting' : 'Mark every casting done'}">${allGreen ? 'clear all' : 'all done'}</button>`}</th>`;
     }).join('');
     const rows = scoped.map(c => `<tr><th class="pp-appr-cast">Cast ${escapeHtml(c.casting_number || '')}${c.description ? `<span class="pp-appr-desc">${escapeHtml(c.description)}</span>` : ''}</th>
@@ -10139,12 +10211,20 @@ function wireEvents() {
 
     // Add Task buttons live inside each column now — handled via delegation in pp-opt-columns below.
 
+    // Releasability approvals box (Casting Inventory tab): fold / open, and fold again after 1 minute without work
+    document.getElementById('pp-appr-toggle')?.addEventListener('click', () => apprSetOpen(!apprOpen));
+    ['click', 'keydown', 'pointermove'].forEach(evt => document.getElementById('pp-appr-card')?.addEventListener(evt, apprTouch, { passive: true }));
     // Releasability Approvals grid
     document.getElementById('pp-appr-table')?.addEventListener('click', async (e) => {
         const all = e.target.closest('button[data-action="appr-all"]');
         if (all) {
             const to = all.dataset.to === 'green' ? MS.GREEN : MS.RED;
-            for (const c of getCastingsForActivePhase()) await toggleApproval(c.id, all.dataset.milestone, to);
+            const scoped = getCastingsForActivePhase();
+            // One click flips the whole column on the Releasability Board, and the box sits on a busy tab: ask first.
+            if (!window.confirm(to === MS.GREEN
+                ? `Mark "${all.dataset.milestone}" done on all ${scoped.length} casting${scoped.length === 1 ? '' : 's'}?\n\nThe Releasability Board follows.`
+                : `Clear "${all.dataset.milestone}" on all ${scoped.length} casting${scoped.length === 1 ? '' : 's'}?\n\nThey go back to red on the Releasability Board.`)) return;
+            for (const c of scoped) await toggleApproval(c.id, all.dataset.milestone, to);
             renderApprovals();
             return;
         }
@@ -10857,7 +10937,8 @@ function wireEvents() {
         syncTracking: syncTrackingFromInventory, renderCastings,
         saveRow: (itemId, castingId) => { const t = inventorySaveTimers.get(itemId); if (t) clearTimeout(t); inventorySaveTimers.delete(itemId); saveInventoryItem(itemId, castingId); },
         recordEdit: (el) => { invRecordEdit(el); el.dataset.before = el.value; el.dataset.beforeLabel = el.selectedOptions?.[0]?.text || ''; },
-        toast: showToast, escapeHtml, trackSave
+        toast: showToast, escapeHtml, trackSave,
+        parseDimension                                   // the list's Proj Sq Ft column reads sizes the way the castings do
     });
     // Type search (2026-11-16): which castings hold a type. It reads the castings the tab shows and changes nothing.
     initInventorySearch({
@@ -11345,7 +11426,8 @@ function finishingLineHtml(casting, entries) {
     for (const e of entries || []) if (e.log && !logs.some(l => l.id === e.log.id)) logs.push(e.log);
     if (!logs.length) return '';
     const { face, partial } = faceSqFtOfInventory(getInventoryFor(casting.id));
-    return finishingProductsHtml(logs, face, { partial });
+    // The Color Log's grout type + fill coat sit right under the finishing / sealing notes (2026-11-19)
+    return groutNotesHtml(logs) + finishingProductsHtml(logs, face, { partial });
 }
 function scrimLineHtml(casting) {
     if (!casting) return '';
@@ -15612,7 +15694,7 @@ async function init() {
     if (urlProject !== null) {
         // Form view. Set the initial tab BEFORE showFormView so its
         // internal setActiveTab + activate-tab calls land on the right panel.
-        if (urlTab && VALID_TABS.has(urlTab)) currentTab = urlTab;
+        if (urlTab && VALID_TABS.has(urlTab)) currentTab = urlTab === 'approvals' ? 'castings' : urlTab;   // the approvals live on Casting Inventory now
         // List data still loads in the background for completeness.
         loadAllData().catch(err => logger.warn(err));
         await showFormView(urlProject);

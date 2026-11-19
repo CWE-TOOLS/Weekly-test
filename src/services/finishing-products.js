@@ -98,6 +98,34 @@ export function finishingRows(logs, face) {
     });
 }
 
+/** One Color Log table row as a line: "Antique White — 2.5%". Blank rows give ''. */
+function pctLine(row, pctKey) {
+    const name = String(row?.name ?? '').trim();
+    const raw = row?.[pctKey];
+    const pct = raw === '' || raw === null || raw === undefined ? '' : String(raw).trim();
+    if (!name && !pct) return '';
+    return `${name || '(no name)'}${pct ? ' — ' + pct + '%' : ''}`;
+}
+
+/**
+ * The Color Log's Grout Type and Fill Coat tables for the Mix Day Totals box (2026-11-19): one pair of boxes per
+ * colour log, written as the log has them (name + ratio %, fill pigment + %). No quantities — the shop has no grout
+ * rate. Same look as the finishing / sealing notes above it.
+ * @param {Array<Object>} logs - colour logs with groutType / fillCoat
+ * @param {{cls?: string, emptyCls?: string}} [opts] - cls: class prefix ('pp-bt-totals' on the portal, 'totals' on the Jane page)
+ */
+export function groutNotesHtml(logs, { cls = 'pp-bt-totals', emptyCls = 'pp-bt-totals-note-empty' } = {}) {
+    const list = (logs || []).filter(Boolean);
+    if (!list.length) return '';
+    const block = (label, lines) => `<div class="${cls}-note"><div class="${cls}-note-title">${esc(label)}</div><div class="${cls}-note-body${lines.length ? '' : ' ' + emptyCls}">${lines.length ? esc(lines.join('\n')) : 'none on the color log'}</div></div>`;
+    return list.map(log => {
+        const suffix = list.length > 1 && log.name ? ` — ${log.name}` : '';
+        const grout = (Array.isArray(log.groutType) ? log.groutType : (Array.isArray(log.grout_type) ? log.grout_type : [])).map(r => pctLine(r, 'ratio')).filter(Boolean);
+        const fill = (Array.isArray(log.fillCoat) ? log.fillCoat : (Array.isArray(log.fill_coat) ? log.fill_coat : [])).map(r => pctLine(r, 'pct')).filter(Boolean);
+        return `<div class="${cls}-notes ${cls}-grout">${block('Color Log grout type' + suffix, grout)}${block('Color Log fill coat' + suffix, fill)}</div>`;
+    }).join('');
+}
+
 /**
  * The block for the Mix Day Totals box. Empty string when the logs name no known product.
  * @param {Array<Object>} logs - colour logs with finishingNotes / sealingNotes

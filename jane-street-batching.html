@@ -709,7 +709,7 @@ function describeSizes(plan) {
 // ======================================================================
 async function loadData() {
     const [ps, cs, cl, bt, tr, inv, jig, fin] = await Promise.all(
-        ['projects-service.js', 'castings-service.js', 'color-log-service.js', 'batch-ticket-service.js', 'tracking-service.js', 'inventory-service.js', 'jig-list-service.js?v=20261112-1', 'finishing-products.js?v=20261106-1']
+        ['projects-service.js', 'castings-service.js', 'color-log-service.js', 'batch-ticket-service.js', 'tracking-service.js', 'inventory-service.js', 'jig-list-service.js?v=20261112-1', 'finishing-products.js?v=20261119-1']
             .map(f => import(SERVICES + f))
     );
     S.svc = { ps, bt, inv, jig, fin };
@@ -1104,7 +1104,9 @@ function ticketPagesHtml(casting, tickets, printedOn = null, castDate = null) {
 function finishingLineHtml(castingId, logs) {
     if (!S.svc?.fin || !logs?.length) return '';
     const { face, partial } = S.svc.fin.faceSqFtOfInventory(S.inv.get(castingId) || []);
-    return S.svc.fin.finishingProductsHtml(logs, face, { cls: 'totals-fin', partial });
+    // The Color Log's grout type + fill coat sit right under the finishing / sealing notes (2026-11-19)
+    const grout = S.svc.fin.groutNotesHtml ? S.svc.fin.groutNotesHtml(logs, { cls: 'totals', emptyCls: 'empty' }) : '';
+    return grout + S.svc.fin.finishingProductsHtml(logs, face, { cls: 'totals-fin', partial });
 }
 /** Scrim line under Mix Day Totals: face sq ft of the casting's whole inventory × the Jig List's scrim layers. */
 function scrimLineHtml(castingId) {
