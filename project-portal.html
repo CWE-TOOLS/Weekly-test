@@ -95,7 +95,7 @@
     <link rel="stylesheet" href="src/styles/variables.css">
     <link rel="stylesheet" href="src/styles/base.css">
     <link rel="stylesheet" href="src/styles/buttons.css">
-    <link rel="stylesheet" href="src/styles/project-portal.css?v=20261112-1">
+    <link rel="stylesheet" href="src/styles/project-portal.css?v=20261119-1">
 
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 </head>
@@ -518,6 +518,9 @@
                                 <textarea id="pp-f-castings_notes" class="pp-tab-notes-textarea" placeholder="Notes for this project's castings…"></textarea>
                             </div>
 
+                            <!-- Type master list (2026-11-11): the job's types + totals; drawn by src/pages/project-portal/type-master.js -->
+                            <div id="pp-type-master" class="pp-type-master" hidden></div>
+
                             <div id="pp-castings-summary" class="pp-castings-summary" hidden>
                                 <div class="pp-cast-sum-card" title="Panels entered in inventory across all castings (quantity + extras), by component type, with how many of them are extras">
                                     <button type="button" class="pp-cast-sum-head" data-sum-toggle="total" aria-expanded="false">
@@ -537,6 +540,23 @@
                                     </button>
                                     <div class="pp-cast-sum-grid" id="pp-cast-sum-rejected-list" hidden></div>
                                 </div>
+                            </div>
+
+                            <!-- Type search (2026-11-16): which castings hold a type; drawn by src/pages/project-portal/inventory-search.js -->
+                            <div id="pp-inv-search" class="pp-inv-search" hidden>
+                              <div class="pp-inv-search-row">
+                                <div class="pp-inv-search-bar">
+                                    <svg class="pp-inv-search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>
+                                    <input type="text" id="pp-inv-search-input" class="pp-inv-search-input" placeholder="Find a type: which castings is it in?" autocomplete="off" spellcheck="false" aria-label="Find a type in the castings">
+                                    <button type="button" id="pp-inv-search-clear" class="pp-inv-search-clear" title="Clear the search" aria-label="Clear the search" hidden>&times;</button>
+                                </div>
+                                <!-- Open or close every casting at once (2026-11-16) -->
+                                <div class="pp-cast-fold" role="group" aria-label="Open or close every casting">
+                                    <button type="button" class="pp-cast-fold-btn" data-cast-fold="open" title="Open every casting">Expand all</button>
+                                    <button type="button" class="pp-cast-fold-btn" data-cast-fold="close" title="Close every casting, so only the title lines show">Collapse all</button>
+                                </div>
+                              </div>
+                                <div id="pp-inv-search-results" class="pp-inv-search-results" hidden></div>
                             </div>
 
                             <div id="pp-castings-empty" class="pp-castings-empty" hidden>
@@ -1370,7 +1390,7 @@
         <div id="pp-toast" class="pp-toast" hidden></div>
     </div>
 
-    <script type="module" src="src/pages/project-portal/project-portal-page.js?v=20261112-2"></script>
+    <script type="module" src="src/pages/project-portal/project-portal-page.js?v=20261119-2"></script>
     <script type="module" src="src/utils/auto-update.js?v=20261023-1"></script>
 </body>
 </html>

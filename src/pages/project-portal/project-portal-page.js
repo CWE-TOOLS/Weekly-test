@@ -84,7 +84,7 @@ import {
     updateInventoryItem,
     deleteInventoryItem,
     setInventoryOrder
-} from '../../services/inventory-service.js?v=20261110-1';
+} from '../../services/inventory-service.js?v=20261111-4';
 import {
     loadColorLogForProject,
     loadColorLogsForProject,
@@ -146,6 +146,9 @@ import {
     deleteLayoutPosition,
 } from '../../services/casting-layout-service.js';
 import { registerRefreshHandler, isPortalChange, isOwnSignal, signalInfo } from '../../services/supabase-service.js';
+// Type master list (2026-11-11): the job's types + totals above the castings; casting rows pick their type from it.
+import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, TM_NEW } from './type-master.js?v=20261119-1';
+import { initInventorySearch, renderInventorySearch } from './inventory-search.js?v=20261116-1';
 import '../../utils/number-wheel-guard.js';   // the mouse wheel must not change a focused hour box (user 2026-11-03)
 
 const STATUS_SORT_ORDER = {
@@ -432,7 +435,7 @@ window.addEventListener('beforeunload', (e) => {
     if (invEdits.size) { e.preventDefault(); e.returnValue = ''; }
 });
 let inventorySaveTimers = new Map();       // itemId -> debounce handle
-let copiedComponents = null;               // Array<{type,width,length,color,sealer,quantity,extras,cu_ft,ff_sq_ft}> from a copy action
+let copiedComponents = null;               // Array<{type,width,length,color,sealer,quantity,extras,cu_ft,ff_sq_ft}> from a copy action (a CUT remake row also carries remake_of_panel_id + remake_of_casting_id)
 const invSelected = new Set();             // inventory row ids ticked for "Copy / Cut selected" (2026-10-13) and "colour the selected" (2026-10-29); only for this screen
 let invLastTick = null;                    // { castingId, id } of the last tick box clicked without Shift — Shift+click ticks the range from it
 function invSelectedIn(castingId) { return getInventoryFor(castingId).filter(it => invSelected.has(it.id)); }
@@ -1250,6 +1253,7 @@ async function loadAndRenderCastings() {
         currentCastInvExpanded = new Set();
         castInvExpandedProject = null;
         currentCastingInventoryLoadedFor = null;
+        await loadTypeMaster(null);
         renderCastings();
         return;
     }
@@ -1265,7 +1269,8 @@ async function loadAndRenderCastings() {
     // the user visits the Tracking tab.
     await Promise.all([
         loadAllInventoryForCurrentProject(),
-        loadAllComponentsForCurrentProject()
+        loadAllComponentsForCurrentProject(),
+        loadTypeMaster(currentProjectNumber)
     ]);
     // First time visiting this project's Castings tab in this session: seed
     // every casting as expanded EXCEPT those with more than the threshold of
@@ -1284,6 +1289,10 @@ async function loadAndRenderCastings() {
     }
     await loadMilestones();
     renderCastings();
+    // Cast day of each casting, from the weekly (2026-11-16): asked on every load of the tab, never awaited.
+    const castDayFor = currentProjectNumber;
+    loadWeeklyCastDates(castDayFor).then(() => { if (currentProjectNumber === castDayFor) refreshCastDayOnCards(); })
+        .catch(err => logger.warn('[project-portal] cast day from the weekly failed:', err));
 }
 
 // Castings with more than this many inventory rows default to collapsed when
@@ -1366,17 +1375,24 @@ function updateCastingsSummary() {
             totalRejected++;
         }
     }
+    // Types the castings hold that the type master list does not name (2026-11-13): flagged on the inventory card.
+    // A list that was never started names nothing: every type is flagged. On a phased job it is the active phase's
+    // list and castings.
+    const missingNames = typeMasterMissing();
+    const offMaster = new Set(missingNames.map(t => t.trim().toLowerCase()));
     // `extras` (the inventory card only): each type also shows its extras as a separate "+ N extras".
     const gridByType = (m, extras = null) => [...m.entries()]
         .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
         .map(([type, n]) => {
             const x = extras ? (extras.get(type) || 0) : 0;
-            const tip = extras ? ` title="${escapeAttr(x ? `${type}: ${n} + ${x} extra${x === 1 ? '' : 's'} = ${n + x} to cast` : `${type}: ${n}, no extras`)}"` : '';
+            const off = !!extras && offMaster.has(type.toLowerCase());
+            const tip = extras ? ` title="${escapeAttr((x ? `${type}: ${n} + ${x} extra${x === 1 ? '' : 's'} = ${n + x} to cast` : `${type}: ${n}, no extras`) + (off ? ' \u2014 NOT on the type master list: add it there so its total is watched' : ''))}"` : '';
             return `
-            <span class="pp-cast-sum-item"${tip}>
+            <span class="pp-cast-sum-item${off ? ' pp-cast-sum-item-off' : ''}"${tip}>
                 <span class="pp-cast-sum-type">${escapeHtml(type)}</span>
                 <span class="pp-cast-sum-n">${n}</span>${x ? `
-                <span class="pp-cast-sum-x">+ ${x} extra${x === 1 ? '' : 's'}</span>` : ''}
+                <span class="pp-cast-sum-x">+ ${x} extra${x === 1 ? '' : 's'}</span>` : ''}${off ? `
+                <span class="pp-cast-sum-offtag">not on master list</span>` : ''}
             </span>`;
         })
         .join('');
@@ -1387,10 +1403,18 @@ function updateCastingsSummary() {
     if (totalEl) totalEl.textContent = String(totalPanels);
     const extrasEl = document.getElementById('pp-cast-sum-extras');
     if (extrasEl) extrasEl.textContent = totalExtras ? ` + ${totalExtras} extra${totalExtras === 1 ? '' : 's'}` : '';
+    // The folded card says it too: "· 2 types not on the master list" (the names on hover).
+    let offEl = document.getElementById('pp-cast-sum-off');
+    if (!offEl && extrasEl) { offEl = document.createElement('span'); offEl.id = 'pp-cast-sum-off'; offEl.className = 'pp-cast-sum-off'; extrasEl.after(offEl); }
+    if (offEl) {
+        offEl.textContent = missingNames.length ? ` \u00b7 ${missingNames.length} type${missingNames.length === 1 ? '' : 's'} not on the master list` : '';
+        offEl.title = missingNames.length ? `Not on the type master list: ${missingNames.join(', ')}` : '';
+    }
     if (rejEl) rejEl.textContent = String(totalRejected);
     if (totalListEl) {
         totalListEl.innerHTML = totalByType.size ? gridByType(totalByType, extrasByType) : '';
         totalListEl.classList.toggle('pp-cast-sum-has-extras', totalExtras > 0);   // wider chips only when a type has extras
+        totalListEl.classList.toggle('pp-cast-sum-has-off', missingNames.length > 0);
     }
     if (rejListEl) rejListEl.innerHTML = totalRejected ? gridByType(rejectedByType) : '';
     wrap.querySelector('.pp-cast-sum-rej')?.classList.toggle('pp-cast-sum-rej-has', totalRejected > 0);
@@ -1426,6 +1450,8 @@ function renderCastings() {
     if (!list || !empty || !needsSave || !addRow) return;
 
     updateCastingsSummary();
+    renderTypeMaster();
+    renderInventorySearch();
 
     const hasProject = !!currentProjectNumber;
     needsSave.hidden = hasProject;
@@ -1474,8 +1500,9 @@ function renderCastingCard(c) {
     const cutBtn = nSel ? `<button class="pp-row-btn pp-row-btn-word pp-row-btn-cut" data-action="cut-selected" type="button" title="Cut the ${nSel} ticked component${nSel === 1 ? '' : 's'} — paste them into another casting">Cut ${nSel} selected</button>` : '';
 
     return `
-        <div class="pp-cast-card${isOpen ? ' pp-cast-card-open' : ''}" data-casting-id="${escapeAttr(c.id)}">
+        <div class="pp-cast-card${isOpen ? ' pp-cast-card-open' : ''}${castDayInfo(c).state === 'done' ? ' pp-cast-done' : ''}" data-casting-id="${escapeAttr(c.id)}">
             <div class="pp-cast-card-header">
+              <div class="pp-cast-card-line1">
                 <button type="button" class="pp-cast-card-chevron" data-action="toggle-inventory" aria-expanded="${isOpen}" title="${isOpen ? 'Collapse inventory' : 'Expand inventory'}">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="9 18 15 12 9 6"/>
@@ -1493,13 +1520,18 @@ function renderCastingCard(c) {
                 <div class="pp-cast-card-desc">
                     <input type="text" class="pp-cast-card-desc-input" data-field="description" value="${escapeAttr(c.description || '')}" placeholder="(no description)" />
                 </div>
+                <button class="pp-row-btn pp-row-btn-delete" data-action="delete" type="button" aria-label="Delete casting" title="Delete casting">&times;</button>
+              </div>
+              <!-- second line (2026-11-18): the title block was too crowded on one line -->
+              <div class="pp-cast-card-line2">
+                ${castDayPillHtml(c)}
                 <span class="pp-cast-card-count">${countLabel}</span>
                 <div class="pp-cast-card-actions">
                     <button class="pp-row-btn pp-row-btn-word" data-action="copy-components" type="button" ${copyDisabled ? 'disabled' : ''} title="${escapeAttr(copyTitle)}">${copyLabel}</button>
                     ${cutBtn}
                     <button class="pp-row-btn pp-row-btn-word" data-action="paste-components" type="button" ${hasComponentClipboard ? '' : 'disabled'} title="Paste copied components into this casting">Paste</button>
-                    <button class="pp-row-btn pp-row-btn-delete" data-action="delete" type="button" aria-label="Delete casting" title="Delete casting">&times;</button>
                 </div>
+              </div>
             </div>
             ${msOn() ? ciCardRowHtml(c) : ''}
             ${isOpen ? renderInventoryBody(c, items) : ''}
@@ -1567,16 +1599,29 @@ function renderInventoryBody(casting, items) {
     `;
 }
 
-function countImportableRemakes(castingId) {
-    let count = 0;
-    const importedKeys = new Set();
-    for (const list of currentCastingComponents.values()) {
-        for (const c of list) {
-            if (c.remake_of_panel_id && c.remake_of_casting_id) {
-                importedKeys.add(`${c.remake_of_casting_id}::${c.remake_of_panel_id}`);
-            }
+/**
+ * Rejected panels a casting has already taken as remakes: "<source casting id>::<panel id>".
+ * Read from the Casting Inventory rows (2026-11-19), by the same rule the Tracking rebuild uses (one id per piece
+ * of the row). It used to be read from the Tracking panels, which are rebuilt a moment AFTER the inventory
+ * changes: a remake row that was deleted kept its panels out of the Import Remakes pool until the tab was left
+ * and opened again. From the inventory, a deleted or reduced remake row frees its panels at once.
+ */
+function importedRemakeKeys() {
+    const keys = new Set();
+    for (const casting of currentCastings) {
+        for (const inv of getInventoryFor(casting.id)) {
+            if (!inv.remake_of_casting_id) continue;
+            const ids = invRemakeIds(inv);
+            const qty = invQtyOf(inv);
+            for (let i = 0; i < qty && i < ids.length; i++) keys.add(`${inv.remake_of_casting_id}::${ids[i]}`);
         }
     }
+    return keys;
+}
+
+function countImportableRemakes(castingId) {
+    let count = 0;
+    const importedKeys = importedRemakeKeys();
     // Hoist the target casting's sort_order once per function call.
     const target = currentCastings.find(cc => cc.id === castingId);
     const targetOrder = target ? (target.sort_order ?? -Infinity) : -Infinity;
@@ -1619,9 +1664,10 @@ function renderInventoryRow(item, castingId) {
                 </svg>
             </div>
             <div class="pp-inv-row-fields">
-                ${invCell(item.id, 'quantity', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'quantity')}" data-field="quantity" min="1" step="1" value="${escapeAttr(item.quantity ?? 1)}"${invEditedTitle(item.id, 'quantity')} />`)}
+                ${invCell(item.id, 'quantity', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'quantity')}" data-field="quantity" min="${typeMasterActive() ? 0 : 1}" step="1" value="${escapeAttr(item.quantity ?? 1)}"${invEditedTitle(item.id, 'quantity')} />`)}
                 ${invCell(item.id, 'extras', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'extras')}" data-field="extras" min="0" step="1" placeholder="0" value="${escapeAttr(item.extras ?? 0)}"${invEditedTitle(item.id, 'extras')} />`)}
-                ${invCell(item.id, 'type', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}" data-field="type" placeholder="Type" value="${escapeAttr(item.type || '')}"${invEditedTitle(item.id, 'type')} />`)}
+                ${invCell(item.id, 'type', typeCellHtml(item, `pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}`, invEditedTitle(item.id, 'type'))
+                    || `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}" data-field="type" placeholder="Type" value="${escapeAttr(item.type || '')}"${invEditedTitle(item.id, 'type')} />`)}
                 ${invCell(item.id, 'description', `<input type="text" class="pp-inv-input pp-inv-pm pp-inv-input-desc${invEditedCls(item.id, 'description')}" data-field="description" placeholder="Description" maxlength="120" value="${escapeAttr(item.description || '')}"${invEditedTitle(item.id, 'description') || (item.description ? ` title="${escapeAttr(item.description)}"` : '')} />`)}
                 ${invCell(item.id, 'width', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'width')}" data-field="width" placeholder="Width" value="${escapeAttr(item.width || '')}"${invEditedTitle(item.id, 'width')} />`)}
                 ${invCell(item.id, 'length', `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'length')}" data-field="length" placeholder="Length" value="${escapeAttr(item.length || '')}"${invEditedTitle(item.id, 'length')} />`)}
@@ -1791,6 +1837,7 @@ async function handleAddCastingClick() {
     card.dataset.draft = 'true';
     card.innerHTML = `
         <div class="pp-cast-card-header">
+          <div class="pp-cast-card-line1">
             <span class="pp-cast-card-chevron-spacer" aria-hidden="true"></span>
             <div class="pp-cast-card-grip" aria-hidden="true">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1807,6 +1854,7 @@ async function handleAddCastingClick() {
             <div class="pp-cast-card-actions">
                 <button class="pp-row-btn pp-row-btn-delete" data-action="cancel-draft" type="button" aria-label="Cancel">&times;</button>
             </div>
+          </div>
         </div>
     `;
     list.appendChild(card);
@@ -2092,16 +2140,9 @@ function openImportRemakesModal(castingId) {
     const submit = document.getElementById('pp-import-remakes-submit');
     if (!modal || !list || !submit || !intro) return;
 
-    // Build the set of source (casting_id, panel_id) pairs that have already
-    // been imported anywhere in this project, so they're excluded.
-    const importedKeys = new Set();
-    for (const arr of currentCastingComponents.values()) {
-        for (const c of arr) {
-            if (c.remake_of_panel_id && c.remake_of_casting_id) {
-                importedKeys.add(`${c.remake_of_casting_id}::${c.remake_of_panel_id}`);
-            }
-        }
-    }
+    // The source (casting_id, panel_id) pairs that have already been imported
+    // anywhere in this project are excluded (read from the inventory rows).
+    const importedKeys = importedRemakeKeys();
 
     const candidates = [];
     const targetOrder = target.sort_order ?? -Infinity;
@@ -2408,7 +2449,7 @@ async function handleAddInventoryItem(castingId) {
         renderCastings();
         // Focus the type input on the newest row
         const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
-        const last = card?.querySelector('.pp-inv-row:last-of-type input[data-field="type"]');
+        const last = card?.querySelector('.pp-inv-row:last-of-type [data-field="type"]');   // text box, or the type dropdown of a job with a master list
         last?.focus();
         ciEntered(castingId);
         syncTrackingFromInventory();
@@ -2420,9 +2461,10 @@ async function handleAddInventoryItem(castingId) {
 }
 
 function saveInventoryItem(itemId, castingId) { return trackSave(saveInventoryItemNow(itemId, castingId)); }
+const invOverAsking = new Set();   // rows whose "more than the master total" question is open
 async function saveInventoryItemNow(itemId, castingId) {
     const row = document.querySelector(`.pp-inv-row[data-inventory-id="${itemId}"]`);
-    if (!row) return;
+    if (!row || invOverAsking.has(itemId)) return;
     const casting = currentCastings.find(c => c.id === castingId);
     if (inventoryEditBlocked(casting)) { renderCastings(); return; }   // final (ready) inventory
     const list = getInventoryFor(castingId);
@@ -2433,9 +2475,10 @@ async function saveInventoryItemNow(itemId, castingId) {
     const fields = {};
     row.querySelectorAll('input[data-field], select[data-field]').forEach(input => {
         const field = input.dataset.field;
+        if (field === 'type' && input.value === TM_NEW) return;   // "+ Create a type" is a command, never a value
         if (field === 'quantity') {
             const n = parseInt(input.value, 10);
-            fields.quantity = (Number.isFinite(n) && n >= 1) ? n : 1;
+            fields.quantity = (Number.isFinite(n) && n >= 1) ? n : (n === 0 ? 0 : 1);
         } else if (field === 'extras') {
             const n = parseInt(input.value, 10);
             fields.extras = (Number.isFinite(n) && n >= 0) ? n : 0;
@@ -2456,6 +2499,9 @@ async function saveInventoryItemNow(itemId, castingId) {
         }
     });
 
+    // Quantity 0 only exists on an extras-only row of a job that has a type master list (2026-11-11).
+    if (fields.quantity === 0 && !(typeMasterActive() && fields.extras > 0)) fields.quantity = 1;
+
     // Diff against current state — skip the round-trip if nothing changed.
     const changed = {};
     for (const k of Object.keys(fields)) {
@@ -2464,6 +2510,21 @@ async function saveInventoryItemNow(itemId, castingId) {
         if (cur !== next) changed[k] = fields[k];
     }
     if (Object.keys(changed).length === 0) return;
+    // Type master list (2026-11-11): a quantity that takes a type past its job total is never saved silently.
+    if (('quantity' in changed || 'type' in changed) && typeMasterActive()) {
+        invOverAsking.add(itemId);
+        let verdict;
+        try { verdict = await typeMasterOverCheck(item, { ...item, ...changed }); } finally { invOverAsking.delete(itemId); }
+        if (verdict.action === 'cancel') { renderCastings(); return; }   // the stored values go back in the boxes
+        if (verdict.action === 'split') {
+            for (const [k, v] of [['quantity', verdict.quantity], ['extras', verdict.extras]]) {
+                if ((item[k] ?? null) === v) delete changed[k]; else changed[k] = v;
+                const box = row.querySelector(`[data-field="${k}"]`);
+                if (box) box.value = v;
+            }
+            if (Object.keys(changed).length === 0) return;
+        }
+    }
     // Count or type changes renumber panels: simulate first (2026-11-09). Colour, sealer, sizes, cu ft, sq ft never do.
     if (['quantity', 'extras', 'type'].some(k => k in changed)
         && inventoryEditBlocked(casting, sim => { const r = (sim.inv.get(castingId) || []).find(x => x.id === itemId); if (r) Object.assign(r, changed); })) {
@@ -2520,6 +2581,7 @@ function castingCountLabelHtml(items) {
 }
 
 function updateCastingInventoryCount(castingId) {
+    refreshTypeMasterStatus();   // the master list's "6 of 10 · 4 left" follows every saved quantity
     const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
     if (!card) return;
     const countEl = card.querySelector('.pp-cast-card-count');
@@ -4701,7 +4763,11 @@ async function cutInventoryItems(castingId, items, label) {
     if (!items.length) return;
     const cutIds = new Set(items.map(it => it.id));
     if (inventoryEditBlocked(casting, sim => { sim.inv.set(castingId, (sim.inv.get(castingId) || []).filter(x => !cutIds.has(x.id))); })) return;
-    copiedComponents = items.map(inventoryClipItem);
+    // A CUT remake row stays a remake where it is pasted (2026-11-19): it carries the rejected panels it re-casts.
+    // Copy never does: the row stays where it was, and the same rejected panel cannot be re-cast twice.
+    copiedComponents = items.map(it => it.remake_of_casting_id && invRemakeIds(it).length
+        ? { ...inventoryClipItem(it), remake_of_panel_id: invRemakeIds(it).join(','), remake_of_casting_id: it.remake_of_casting_id }
+        : inventoryClipItem(it));
     try {
         for (const it of items) {
             const t = inventorySaveTimers.get(it.id);
@@ -4754,16 +4820,50 @@ async function handlePasteComponents(targetCastingId) {
     if (!Array.isArray(copiedComponents) || copiedComponents.length === 0) return;
     if (!targetCastingId) return;
     const targetCasting = currentCastings.find(c => c.id === targetCastingId);
+    if (inventoryEditBlocked(targetCasting)) return;          // ready (final): the usual notice, before any question
+    // Type master list: a paste that would take a type past its total is asked about first (user rule 2026-11-13).
+    // The answer can turn the surplus into extras, so the tracking-mark guard runs on the rows that will really go in.
+    let clip = copiedComponents;
+    let masterVerdict = null;
+    if (typeMasterActive()) {
+        masterVerdict = await typeMasterPasteCheck(clip, targetCasting);
+        if (masterVerdict.action === 'cancel') return;
+        clip = masterVerdict.items;
+    }
+    // Remake rows that were CUT keep their "Remake Of" link (2026-11-19), panel by panel, while the link still holds:
+    // the panel is not re-cast by another row already (the same clipboard pasted twice, or imported somewhere in
+    // between) and this casting comes after the cast the panel was rejected in (the Import Remakes rule).
+    const linkNote = { kept: 0, lost: 0 };
+    {
+        const taken = importedRemakeKeys();
+        const targetOrder = targetCasting?.sort_order ?? -Infinity;
+        clip = clip.map(src => {
+            if (!src.remake_of_casting_id) return src;
+            const from = currentCastings.find(c => c.id === src.remake_of_casting_id);
+            const after = !!from && (from.sort_order ?? -Infinity) < targetOrder;
+            const ids = invRemakeIds(src);
+            const keep = ids.filter(id => {
+                const key = `${src.remake_of_casting_id}::${id}`;
+                if (!after || taken.has(key)) return false;
+                taken.add(key);
+                return true;
+            });
+            linkNote.kept += keep.length;
+            linkNote.lost += ids.length - keep.length;
+            return { ...src, remake_of_panel_id: keep.join(',') || null, remake_of_casting_id: keep.length ? src.remake_of_casting_id : null };
+        });
+    }
     if (inventoryEditBlocked(targetCasting, sim => {
-        const rows = sim.inv.get(targetCastingId) || []; for (const it of copiedComponents) rows.push({ ...it, id: null }); sim.inv.set(targetCastingId, rows);
+        const rows = sim.inv.get(targetCastingId) || []; for (const it of clip) rows.push({ ...it, id: null }); sim.inv.set(targetCastingId, rows);
     })) return;
+    masterVerdict?.commit?.();                                 // "raise the master totals": only now that the paste goes ahead
     if (!currentCastInvExpanded.has(targetCastingId)) currentCastInvExpanded.add(targetCastingId);
     try {
         const existing = getInventoryFor(targetCastingId);
         const baseOrder = existing.length > 0
             ? Math.max(...existing.map(c => c.sort_order || 0)) + 1
             : 0;
-        const inserted = await Promise.all(copiedComponents.map((src, idx) =>
+        const inserted = await Promise.all(clip.map((src, idx) =>
             createInventoryItem(targetCastingId, { ...src, sort_order: baseOrder + idx })
         ));
         const list = existing.slice();
@@ -4772,7 +4872,9 @@ async function handlePasteComponents(targetCastingId) {
         renderCastings();
         const target = currentCastings.find(c => c.id === targetCastingId);
         const n = inserted.filter(Boolean).length;
-        showToast(`Pasted ${n} component${n === 1 ? '' : 's'} into Cast ${target?.casting_number || ''}.`);
+        const linkText = (linkNote.kept ? ` Remake link kept for ${linkNote.kept} panel${linkNote.kept === 1 ? '' : 's'}.` : '')
+            + (linkNote.lost ? ` ${linkNote.lost} panel${linkNote.lost === 1 ? '' : 's'} went in WITHOUT the remake link (already a remake somewhere else, or this casting is not after the cast they were rejected in).` : '');
+        showToast(`Pasted ${n} component${n === 1 ? '' : 's'} into Cast ${target?.casting_number || ''}.${linkText}`, linkNote.lost ? 'error' : undefined, linkNote.lost ? 9000 : undefined);
         if (n) ciEntered(targetCastingId);
         syncTrackingFromInventory();
         msInventoryChanged(targetCastingId);
@@ -5557,13 +5659,15 @@ function updateMsFloat() {
     if (panel.style.paddingTop !== want) panel.style.paddingTop = want;
 }
 
+/** Numbered pieces of a row: at least 1, except an extras-only row (quantity 0 with extras), which numbers none (2026-11-11). */
+function invQtyOf(inv) { const n = parseInt(inv.quantity, 10); return (n === 0 && (parseInt(inv.extras, 10) || 0) > 0) ? 0 : Math.max(1, n || 1); }
 /** Panel ids every casting should have, from the inventory: Map casting id → expected rows (the Tracking mirror). */
 function expectedPanelsFor(castingsInOrder, invOf) {
     const typeTotals = new Map();
     for (const casting of castingsInOrder) {
         for (const inv of invOf(casting.id)) {
             if (!inv.type) continue;
-            const qty = Math.max(1, parseInt(inv.quantity, 10) || 1);
+            const qty = invQtyOf(inv);
             typeTotals.set(inv.type, (typeTotals.get(inv.type) || 0) + qty);
         }
     }
@@ -5579,7 +5683,7 @@ function expectedPanelsFor(castingsInOrder, invOf) {
     for (const casting of castingsInOrder) {
         const expected = [];
         for (const inv of invOf(casting.id)) {
-            const qty = Math.max(1, parseInt(inv.quantity, 10) || 1);
+            const qty = invQtyOf(inv);
             const extras = Math.max(0, parseInt(inv.extras, 10) || 0);
             // A remake row re-casts several rejected panels (one id per piece): each piece points back at its own one.
             const remakeIds = inv.remake_of_casting_id ? invRemakeIds(inv) : [];
@@ -10741,6 +10845,40 @@ function wireEvents() {
 
     // Castings: summary readout expand/collapse
     document.getElementById('pp-castings-summary')?.addEventListener('click', handleCastingsSummaryToggle);
+    // Type master list (2026-11-11): its own card + the type dropdown and cross-casting values of the rows below.
+    initTypeMaster({
+        // A phased job keeps one list per phase: the module only ever sees the active phase's castings.
+        castings: getCastingsForActivePhase,
+        scope: () => !currentPhasesEnabled ? { suffix: '', label: '' }
+            : (currentPhaseId ? { suffix: ':' + currentPhaseId, label: currentPhases.find(ph => ph.id === currentPhaseId)?.phase_name || '' } : null),
+        inventoryOf: getInventoryFor, colorLogs: () => currentColorLogs, colorSelectHtml: buildColorLogSelectHtml,
+        isFinal: ciLockedById, updateItem: updateInventoryItem, editBlocked: inventoryEditBlocked,
+        afterChange: (castingId) => { msInventoryChanged(castingId); updateCastingInventoryCount(castingId); },
+        syncTracking: syncTrackingFromInventory, renderCastings,
+        saveRow: (itemId, castingId) => { const t = inventorySaveTimers.get(itemId); if (t) clearTimeout(t); inventorySaveTimers.delete(itemId); saveInventoryItem(itemId, castingId); },
+        recordEdit: (el) => { invRecordEdit(el); el.dataset.before = el.value; el.dataset.beforeLabel = el.selectedOptions?.[0]?.text || ''; },
+        toast: showToast, escapeHtml, trackSave
+    });
+    // Type search (2026-11-16): which castings hold a type. It reads the castings the tab shows and changes nothing.
+    initInventorySearch({
+        castings: () => (currentProjectNumber ? getCastingsForActivePhase() : []),
+        inventoryOf: getInventoryFor,
+        masterEntries: typeMasterEntries,
+        openCasting: (castingId) => { currentCastInvExpanded.add(castingId); renderCastings(); },
+        scopeWord: () => (currentPhasesEnabled ? 'this phase' : 'this job'),
+        scopeKey: () => `${currentProjectNumber || ''}|${currentPhasesEnabled ? (currentPhaseId || '') : ''}`,
+        escapeHtml
+    });
+    // Expand all / Collapse all (2026-11-16): every casting the tab shows, in one click. Each casting's own arrow
+    // still opens or closes just that one afterwards.
+    document.getElementById('pp-inv-search')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-cast-fold]');
+        if (!btn) return;
+        const ids = getCastingsForActivePhase().map(c => c.id);
+        if (btn.dataset.castFold === 'open') ids.forEach(id => currentCastInvExpanded.add(id));
+        else ids.forEach(id => currentCastInvExpanded.delete(id));
+        renderCastings();
+    });
 
     // Castings: row actions (delegation)
     const castingsList = document.getElementById('pp-castings-list');
@@ -10864,9 +11002,9 @@ function wireEvents() {
     castingsList.addEventListener('focusin', (e) => {
         if (!e.target.matches('.pp-inv-row[data-inventory-id] input[data-field], .pp-inv-row[data-inventory-id] select[data-field]')) return;
         e.target.dataset.before = e.target.value;
-        if (e.target.tagName === 'SELECT') e.target.dataset.beforeLabel = e.target.selectedOptions[0]?.text || '';
+        if (e.target.tagName === 'SELECT') e.target.dataset.beforeLabel = e.target.selectedOptions[0]?.dataset.short || e.target.selectedOptions[0]?.text || '';
     });
-    castingsList.addEventListener('focusout', (e) => { invRecordEdit(e.target); });
+    castingsList.addEventListener('focusout', (e) => { if (e.target.matches?.('select[data-field="type"]')) return; invRecordEdit(e.target); });
     castingsList.addEventListener('focusout', (e) => {
         if (!e.target.matches('.pp-cast-card-header input[data-field="casting_number"], .pp-cast-card-header input[data-field="description"]')) return;
         const id = e.target.closest('.pp-cast-card[data-casting-id]')?.getAttribute('data-casting-id');
@@ -10895,6 +11033,7 @@ function wireEvents() {
         if (!e.target.matches('select[data-field]')) return;
         const invRow = e.target.closest('.pp-inv-row[data-inventory-id]');
         if (!invRow) return;
+        if (e.target.dataset.field === 'type') return;   // the type dropdown commits through type-master.js (fills the row first)
         invRecordEdit(e.target);
         e.target.dataset.before = e.target.value;
         e.target.dataset.beforeLabel = e.target.selectedOptions[0]?.text || '';
@@ -12268,6 +12407,7 @@ async function handleImportBatchFromTracking(castingId) {
 // with one click; no Cast task on the weekly → "casting not yet scheduled".
 let weeklyCastDates = null;      // Map casting_number (trimmed) -> 'YYYY-MM-DD' (first Cast day)
 let weeklyCastDatesFor = null;   // project number the map belongs to
+let weeklyCastLastDates = null;  // Map casting_number -> 'YYYY-MM-DD' (last Cast day: a casting poured over several days is cast once that one is over)
 
 function isoDay(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function shortDay(iso) { const d = new Date(iso + 'T00:00:00'); return isNaN(d) ? iso : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
@@ -12275,6 +12415,7 @@ function shortDay(iso) { const d = new Date(iso + 'T00:00:00'); return isNaN(d) 
 async function loadWeeklyCastDates(projectNumber) {
     const pn = String(projectNumber || '').trim();
     const map = new Map();
+    const last = new Map();
     if (!pn) return map;
     try {
         const all = await fetchAllTasks();
@@ -12287,12 +12428,63 @@ async function loadWeeklyCastDates(projectNumber) {
             if (!d) continue;
             const iso = isoDay(d);
             if (!map.has(cn) || iso < map.get(cn)) map.set(cn, iso);
+            if (!last.has(cn) || iso > last.get(cn)) last.set(cn, iso);
         }
     } catch (err) {
         logger.error('[batch-tickets] weekly cast dates failed:', err);
     }
-    if (String(currentProjectNumber || '').trim() === pn) { weeklyCastDates = map; weeklyCastDatesFor = pn; }
+    if (String(currentProjectNumber || '').trim() === pn) { weeklyCastDates = map; weeklyCastLastDates = last; weeklyCastDatesFor = pn; }
     return map;
+}
+
+// ---------- Cast day on the Casting Inventory cards (2026-11-16) ----------
+// Each casting's title block says when the weekly has it cast, read from the weekly every time the tab opens:
+// nothing to press and nothing is saved (unlike the Batch Tickets Cast Date, which is a stored field with its
+// "Use it" button). A casting whose cast day is over gets a green border round its whole card. No Cast task on
+// the weekly = "casting not yet scheduled" — except an old casting the weekly no longer lists: if its batch
+// ticket Cast Date is in the past, that date is shown (and says where it comes from).
+/** @returns {{state:'loading'|'none'|'done'|'today'|'soon', first?:string, last?:string, fromPortal?:boolean}} */
+function castDayInfo(c) {
+    const pn = String(currentProjectNumber || '').trim();
+    if (!weeklyCastDates || weeklyCastDatesFor !== pn) return { state: 'loading' };
+    const cn = String(c.casting_number || '').trim();
+    const today = isoDay(new Date());
+    let first = weeklyCastDates.get(cn) || null;
+    let last = (weeklyCastLastDates && weeklyCastLastDates.get(cn)) || first;
+    let fromPortal = false;
+    if (!first) {
+        const own = String(c.casting_date || '').slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(own) && own < today) { first = last = own; fromPortal = true; }
+    }
+    if (!first) return { state: 'none' };
+    return { state: last < today ? 'done' : (first <= today ? 'today' : 'soon'), first, last, fromPortal };
+}
+function castDayLong(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    if (isNaN(d)) return iso;
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + (d.getFullYear() !== new Date().getFullYear() ? `, ${d.getFullYear()}` : '');
+}
+function castDayPillHtml(c) {
+    const i = castDayInfo(c);
+    const pill = (cls, text, title) => `<span class="pp-cast-card-day pp-cast-day-${cls}" data-cast-day title="${escapeAttr(title)}">${escapeHtml(text)}</span>`;
+    if (i.state === 'loading') return pill('loading', 'checking the weekly…', 'Reading the cast day from the weekly');
+    if (i.state === 'none') return pill('none', 'casting not yet scheduled', 'The weekly has no Cast task for this casting');
+    const span = i.first === i.last ? castDayLong(i.first) : `${castDayLong(i.first)} – ${castDayLong(i.last)}`;
+    const src = i.fromPortal ? 'From the batch ticket Cast Date: the weekly no longer lists this casting' : 'Cast day from the weekly';
+    if (i.state === 'done') return pill('done', `✓ Cast ${span}`, `${src}. This casting has been cast.`);
+    if (i.state === 'today') return pill('today', i.first === i.last ? 'Casting today' : `Casting now · ${span}`, src);
+    const days = Math.round((new Date(i.first + 'T00:00:00') - new Date(isoDay(new Date()) + 'T00:00:00')) / 86400000);
+    return pill('soon', `Casts ${span} · ${days === 1 ? 'tomorrow' : `in ${days} days`}`, src);
+}
+/** The weekly has answered: put the cast day on the cards that are on screen (nothing else is redrawn). */
+function refreshCastDayOnCards() {
+    document.querySelectorAll('#pp-castings-list .pp-cast-card[data-casting-id]').forEach(card => {
+        const c = currentCastings.find(x => x.id === card.dataset.castingId);
+        if (!c) return;
+        const el = card.querySelector('[data-cast-day]');
+        if (el) el.outerHTML = castDayPillHtml(c);
+        card.classList.toggle('pp-cast-done', castDayInfo(c).state === 'done');
+    });
 }
 
 /** Fill every BLANK Cast Date of the current project from the weekly; returns how many were filled. */

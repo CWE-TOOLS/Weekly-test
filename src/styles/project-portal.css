@@ -696,7 +696,8 @@ body { overflow: visible; }
 
 /* ---------- Castings panel ---------- */
 .pp-castings-wrap {
-    max-width: 920px;
+    /* wider (2026-11-18): the tab uses the room of the screen, keeping a margin each side; never narrower than the old 920px cap */
+    max-width: max(920px, min(1400px, calc(100% - 170px)));
     margin: 24px auto;
     background: #ffffff;
     padding: 28px 32px;
@@ -705,6 +706,88 @@ body { overflow: visible; }
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 .pp-castings-header { margin-bottom: 18px; }
+
+/* Type master list (2026-11-11): the job's types + totals, between the Notes and the panel readouts */
+.pp-type-master { margin: 14px 0 12px; }
+.pp-type-master[hidden] { display: none; }
+.pp-tm-card { background: #f8fafc; border: 1px solid #cbd5e1; border-left: 4px solid #1d4ed8; border-radius: 8px; padding: 10px 12px; }
+.pp-tm-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; background: none; border: none; padding: 0; text-align: left; font-family: inherit; font-size: 12.5px; color: #334155; cursor: pointer; }
+.pp-tm-head:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; border-radius: 4px; }
+.pp-tm-open .pp-tm-head .pp-cast-sum-chev { transform: rotate(90deg); }
+.pp-tm-top { display: flex; align-items: center; gap: 10px; }
+.pp-tm-top .pp-tm-head { flex: 1 1 auto; width: auto; min-width: 0; }
+.pp-tm-lock { flex: 0 0 auto; padding: 4px 12px; border: 1px solid #94a3b8; border-radius: 9999px; background: #fff; color: #334155; font-family: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.pp-tm-lock:hover { background: #eff6ff; border-color: #1d4ed8; color: #1d4ed8; }
+.pp-tm-lock:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.pp-tm-locked .pp-tm-lock { background: #1e293b; border-color: #1e293b; color: #fff; }
+.pp-tm-locked .pp-tm-lock:hover { background: #334155; border-color: #334155; color: #fff; }
+.pp-tm-locked .pp-tm-in:disabled { background: #f1f5f9; border-color: #cbd5e1; color: #0f172a; -webkit-text-fill-color: #0f172a; opacity: 1; cursor: not-allowed; }
+.pp-tm-locked .pp-tm-in.pp-tm-off:disabled { background: #fffbeb; border-color: #d97706; }
+.pp-tm-locked .pp-tm-del { visibility: hidden; }
+.pp-tm-locked .pp-tm-actions .pp-add-btn { display: none; }
+.pp-tm-tip-locked { display: none; }
+.pp-tm-locked .pp-tm-tip-locked { display: inline; }
+.pp-tm-locked .pp-tm-tip-open { display: none; }
+.pp-tm-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #1e3a8a; }
+.pp-tm-headsum { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pp-tm-sum b { color: #0f172a; }
+.pp-tm-flag { padding: 1px 8px; border-radius: 9999px; font-size: 11px; font-weight: 700; background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+.pp-tm-flag.pp-tm-flag-unplaced { background: #fff1f2; color: #be123c; border-color: #fda4af; }
+.pp-tm-pill.pp-tm-unplaced { background: #fff1f2; color: #be123c; border-color: #fda4af; }
+/* No pill may run past its column (the long "not in any casting yet" one did, 2026-11-16): that one wraps onto a
+   second line inside the column, the short ones are cut with an ellipsis if a column ever gets too narrow. */
+.pp-tm-pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.pp-tm-pill.pp-tm-unplaced { white-space: normal; border-radius: 10px; line-height: 1.25; text-align: center; cursor: help; }
+.pp-tm-row-unplaced .pp-tm-in.pp-tm-type, .pp-tm-locked .pp-tm-row-unplaced .pp-tm-in.pp-tm-type:disabled { background: #fff1f2; border-color: #fb7185; }
+.pp-tm-flag.pp-tm-flag-over { background: #fef2f2; color: #b91c1c; border-color: #fca5a5; }
+.pp-tm-body { margin-top: 10px; }
+.pp-tm-hint { margin: 0 0 10px; font-size: 12.5px; line-height: 1.5; color: #475569; }
+.pp-tm-row { display: grid; grid-template-columns: 18px minmax(0, 0.7fr) minmax(0, 0.5fr) minmax(0, 1.45fr) minmax(0, 0.6fr) minmax(0, 0.6fr) minmax(0, 1.2fr) minmax(0, 0.55fr) minmax(0, 0.6fr) minmax(150px, 1.3fr) 22px; gap: 6px; align-items: center; margin-bottom: 4px; }
+.pp-tm-headrow span { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #1d4ed8; text-align: center; }
+.pp-tm-in { width: 100%; min-width: 0; padding: 4px 6px; border: 1px solid #94a3b8; border-radius: 4px; background: #fff; font-family: inherit; font-size: 12px; line-height: 1.3; color: #0f172a; text-align: center; }
+select.pp-tm-in { text-align-last: center; padding-left: 2px; padding-right: 0; }
+.pp-tm-in::placeholder { color: #94a3b8; }
+.pp-tm-in:focus { outline: none; border-color: #1d4ed8; box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.18); }
+.pp-tm-in.pp-tm-type { font-weight: 700; }
+.pp-tm-in.pp-tm-off { border-color: #d97706; background: #fffbeb; }
+.pp-tm-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; min-width: 0; }
+.pp-tm-pill { padding: 2px 8px; border-radius: 9999px; border: 1px solid; font-weight: 700; white-space: nowrap; cursor: help; }
+.pp-tm-pill.pp-tm-left { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+.pp-tm-pill.pp-tm-done { background: #f0fdf4; color: #166534; border-color: #86efac; }
+.pp-tm-pill.pp-tm-over { background: #fef2f2; color: #b91c1c; border-color: #fca5a5; }
+.pp-tm-pill.pp-tm-none { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+.pp-tm-x { font-weight: 600; color: #1d4ed8; white-space: nowrap; cursor: help; }
+.pp-tm-del { width: 22px; height: 22px; border: none; border-radius: 4px; background: none; color: #94a3b8; font-size: 16px; line-height: 1; cursor: pointer; padding: 0; }
+.pp-tm-del:hover { background: #fee2e2; color: #b91c1c; }
+.pp-tm-tick { width: 15px; height: 15px; margin: 0; justify-self: center; cursor: pointer; accent-color: #1d4ed8; }
+.pp-tm-locked .pp-tm-tick { visibility: hidden; }
+.pp-tm-row-ticked { background: #dbeafe; border-radius: 5px; box-shadow: 0 0 0 3px #dbeafe; }
+.pp-tm-tickbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; padding: 6px 10px; border: 1px solid #93c5fd; border-radius: 6px; background: #eff6ff; font-size: 12px; color: #1e3a8a; }
+.pp-tm-tickbar[hidden] { display: none; }
+.pp-tm-untick { margin-left: auto; padding: 3px 10px; border: 1px solid #1d4ed8; border-radius: 9999px; background: #fff; color: #1d4ed8; font-family: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.pp-tm-untick:hover { background: #1d4ed8; color: #fff; }
+.pp-tm-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.pp-tm-actions .pp-add-btn { width: auto; margin: 0; }
+.pp-tm-tip { font-size: 11px; color: #64748b; }
+/* a casting row's Type once the job has a master list: a dropdown; amber when its type is not on the list */
+select.pp-inv-input.pp-inv-type-select { -webkit-appearance: none; appearance: none; text-align-last: center; padding-left: 3px; padding-right: 13px; font-weight: 600; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, #475569 50%), linear-gradient(135deg, #475569 50%, transparent 50%); background-position: calc(100% - 8px) 50%, calc(100% - 4px) 50%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+.pp-inv-input.pp-inv-type-off { border-color: #d97706; background: #fffbeb; }
+/* the master list's own small dialog (create a type / more than the job total) */
+.pp-tm-modal { position: fixed; inset: 0; z-index: 10050; background: rgba(15, 23, 42, 0.45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.pp-tm-dialog { width: min(520px, 100%); background: #fff; border-radius: 10px; border-top: 5px solid #d97706; box-shadow: 0 20px 50px rgba(15, 23, 42, 0.35); padding: 18px 20px 16px; font-size: 14px; color: #0f172a; }
+.pp-tm-dialog-title { margin: 0 0 10px; font-size: 17px; font-weight: 700; }
+.pp-tm-dialog-body p { margin: 0 0 8px; line-height: 1.5; }
+.pp-tm-dialog-dim { color: #64748b; }
+.pp-tm-dialog-over { color: #b91c1c; }
+.pp-tm-dialog-note { font-size: 12px; color: #64748b; }
+.pp-tm-dialog-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; font-weight: 600; }
+.pp-tm-dialog-row input { width: 190px; padding: 6px 8px; border: 1px solid #94a3b8; border-radius: 5px; font-family: inherit; font-size: 14px; }
+.pp-tm-dialog-btns { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.pp-tm-btn { padding: 8px 14px; border: 1px solid #94a3b8; border-radius: 6px; background: #fff; font-family: inherit; font-size: 13px; font-weight: 600; color: #0f172a; cursor: pointer; }
+.pp-tm-btn:hover { background: #f1f5f9; }
+.pp-tm-btn.pp-tm-btn-primary { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+.pp-tm-btn.pp-tm-btn-primary:hover { background: #1e40af; }
 
 /* Project-wide panel readouts above the casting list */
 .pp-castings-summary {
@@ -810,6 +893,12 @@ body { overflow: visible; }
     white-space: nowrap;
 }
 .pp-cast-sum-extras { font-weight: 600; color: #b45309; }
+/* Types in the castings that the type master list does not name (2026-11-13) */
+.pp-cast-sum-off { font-weight: 700; color: #be123c; }
+.pp-cast-sum-grid.pp-cast-sum-has-off { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.pp-cast-sum-grid.pp-cast-sum-has-extras.pp-cast-sum-has-off { grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); }
+.pp-cast-sum-item.pp-cast-sum-item-off { flex-wrap: wrap; row-gap: 0; background: #fff1f2; border-color: #fda4af; }
+.pp-cast-sum-offtag { flex: 0 0 100%; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #be123c; }
 .pp-cast-sum-rej-has {
     background: #fef2f2;
     border-color: #fecaca;
@@ -819,6 +908,43 @@ body { overflow: visible; }
 .pp-cast-sum-rej-has .pp-cast-sum-item { border-color: #fee2e2; }
 .pp-cast-sum-rej-has .pp-cast-sum-type { color: #7f1d1d; }
 .pp-cast-sum-rej-has .pp-cast-sum-n { color: #b91c1c; }
+/* Type search on the Casting Inventory tab (2026-11-16) */
+.pp-inv-search { margin: 0 0 16px; }
+.pp-inv-search[hidden] { display: none; }
+.pp-inv-search-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pp-inv-search-bar { position: relative; display: flex; align-items: center; flex: 1 1 280px; max-width: 460px; }
+.pp-cast-fold { display: inline-flex; gap: 6px; margin-left: auto; }
+.pp-cast-fold-btn { padding: 6px 12px; border: 1px solid #94a3b8; border-radius: 8px; background: #fff; color: #334155; font-family: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.pp-cast-fold-btn:hover { background: #eff6ff; border-color: #1d4ed8; color: #1d4ed8; }
+.pp-cast-fold-btn:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.pp-inv-search-icon { position: absolute; left: 10px; width: 15px; height: 15px; color: #64748b; pointer-events: none; }
+.pp-inv-search-input { flex: 1 1 auto; min-width: 0; padding: 7px 30px 7px 32px; border: 1px solid #94a3b8; border-radius: 8px; background: #fff; font-family: inherit; font-size: 13px; color: #0f172a; }
+.pp-inv-search-input::placeholder { color: #94a3b8; }
+.pp-inv-search-input:focus { outline: none; border-color: #1d4ed8; box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.18); }
+.pp-inv-search-clear { position: absolute; right: 6px; width: 22px; height: 22px; border: none; border-radius: 4px; background: none; color: #64748b; font-size: 17px; line-height: 1; cursor: pointer; padding: 0; }
+.pp-inv-search-clear:hover { background: #e2e8f0; color: #0f172a; }
+.pp-inv-search-clear[hidden] { display: none; }
+.pp-inv-search-results { margin-top: 8px; padding: 8px 10px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; max-height: 320px; overflow-y: auto; }
+.pp-inv-search-results[hidden] { display: none; }
+.pp-inv-sr { padding: 6px 0; }
+.pp-inv-sr + .pp-inv-sr { border-top: 1px solid #e2e8f0; }
+.pp-inv-sr-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: #475569; }
+.pp-inv-sr-type { font-size: 13.5px; font-weight: 700; color: #0f172a; }
+.pp-inv-sr-tot b { color: #0f172a; }
+.pp-inv-sr-tag { padding: 1px 8px; border-radius: 9999px; border: 1px solid; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.pp-inv-sr-tag.pp-inv-sr-on { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.pp-inv-sr-tag.pp-inv-sr-off { background: #fff1f2; color: #be123c; border-color: #fda4af; }
+.pp-inv-sr-casts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.pp-inv-sr-cast { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-family: inherit; font-size: 12px; color: #0f172a; cursor: pointer; }
+.pp-inv-sr-cast:hover { border-color: #1d4ed8; background: #eff6ff; }
+.pp-inv-sr-cast:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 1px; }
+.pp-inv-sr-castname { font-weight: 600; color: #334155; }
+.pp-inv-sr-x { font-weight: 600; color: #b45309; }
+.pp-inv-sr-rm { font-weight: 600; color: #7f1d1d; }
+.pp-inv-sr-none { font-size: 12px; font-weight: 700; color: #be123c; }
+.pp-inv-sr-more { margin: 4px 0; font-size: 12px; color: #64748b; }
+.pp-cast-card.pp-inv-found-card { box-shadow: 0 0 0 2px #1d4ed8; }
+.pp-inv-row.pp-inv-found { background: #dbeafe; box-shadow: inset 3px 0 0 #1d4ed8; transition: background 0.4s; }
 .pp-castings-title {
     margin: 0 0 4px 0;
     font-size: 18px;
@@ -861,13 +987,28 @@ body { overflow: visible; }
     border-color: #cbd5e1;
     box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
 }
+/* Cast day from the weekly on each casting card (2026-11-16); a casting that has been cast gets a green border */
+.pp-cast-card.pp-cast-done, .pp-cast-card.pp-cast-done:hover, .pp-cast-card-open.pp-cast-done { border-color: #16a34a; box-shadow: 0 0 0 1px #16a34a; }
+.pp-cast-card.pp-cast-done.pp-inv-found-card { border-color: #1d4ed8; box-shadow: 0 0 0 2px #1d4ed8; }
+.pp-cast-card-day { flex: 0 0 auto; padding: 2px 9px; border: 1px solid; border-radius: 10px; font-size: 11.5px; font-weight: 700; white-space: nowrap; cursor: help; }
+.pp-cast-day-loading { border-color: transparent; color: #94a3b8; font-weight: 500; font-style: italic; }
+.pp-cast-day-none { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
+.pp-cast-day-soon { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.pp-cast-day-today { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+.pp-cast-day-done { background: #f0fdf4; border-color: #86efac; color: #166534; }
+/* Title block on two lines (2026-11-18): line 1 = arrow, grip, casting number, description, delete;
+   line 2 = cast day, totals, Copy / Cut / Paste. The description gets the whole first line. */
 .pp-cast-card-header {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 10px 6px 4px;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px 10px 7px 4px;
     min-height: 44px;
 }
+.pp-cast-card-line1 { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.pp-cast-card-line1 > .pp-row-btn-delete { flex: 0 0 auto; }
+.pp-cast-card-line2 { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding-left: 64px; min-height: 26px; }
+.pp-cast-card-line2 .pp-cast-card-actions { margin-left: auto; }
 .pp-cast-card-chevron {
     flex: 0 0 auto;
     width: 22px;
