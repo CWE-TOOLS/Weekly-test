@@ -130,7 +130,7 @@ import {
 } from '../../services/classroom-tasks-service.js';
 import { renderCastingLayout, computeLayoutRects, parseDimension, tableBlockRects, CASTING_AREAS } from './casting-layout.js?v=20261112-1';
 import { attachLayoutDrag } from './casting-layout-drag.js?v=20261120-1';
-import { LAYOUT_DAYS_PREFIX, normLayoutDays, layoutDayOf, layoutDaysSplit, layoutDaySide, placeKeys, inventoryPieceRows } from '../../utils/layout-days.js?v=20261120-1';
+import { LAYOUT_DAYS_PREFIX, normLayoutDays, resolveLayoutDays, layoutDayRows, layoutDaysEmpty, layoutDaysCanon, castDayDates, layoutDayOf, layoutDaysSplit, layoutDaySide, placeKeys, inventoryPieceRows } from '../../utils/layout-days.js?v=20261120-4';
 import { activateJigListTab } from './jig-list.js?v=20261112-1';
 import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js?v=20261119-1';
 import { SLUMP_TARGET_DEFAULTS, FINAL_BACKUP_PIG_REDUCTION_PCT, parsePigReduction, BT_IMPORT_META, btOverrides, btImportStamp, btStampDate, additiveAmount, batchTotalsRows, renderBatchTotals, clampSlumpTarget, formatSlumpLabel, renderSlumpGraphic, renderBatchTicketCard, BATCH_PRINT_CSS } from '../../services/batch-ticket-render.js';
@@ -138,7 +138,7 @@ import { finishingProductsHtml, faceSqFtOfInventory } from '../../services/finis
 import { invHash as invHashShared, invFingerprintRows, invColourFingerprintRows } from '../../services/inventory-marks.js';
 import { loadMilestonesForProject, saveMilestone, isMilestonesMigrationPending, loadLayoutConditions, loadLayoutConditionsForCastings, LAYOUT_CONDITION_PREFIX, layoutConditionNote, parseLayoutCondition, sideWords } from '../../services/milestones-service.js';
 import { loadJigListsForProject as loadJigListsForScrim, scrimForInventory } from '../../services/jig-list-service.js?v=20261112-1';
-import { loadReadyFlags, setReadyFlag, loadSettingRows, setSettingRow, loadScheduleForCastings, OPT_SCHEDULER_PREFIX } from '../../services/schedule-service.js?v=20261106-1';
+import { loadReadyFlags, setReadyFlag, loadSettingRows, setSettingRow, loadScheduleForCastings, OPT_SCHEDULER_PREFIX } from '../../services/schedule-service.js?v=20261120-1';
 import { tasksForDepartment, teamOfDepartment, taskForPhase, STAGING_NAME_OF_TEAM, REVENUE_PER_HOUR } from '../../config/scheduler-config.js?v=20261027-1';
 import {
     loadLayoutPositions,
@@ -1301,13 +1301,17 @@ async function loadAndRenderCastings() {
         const undrawn = currentCastings.some(c => castDatesOf(c).length > 1 && currentCastInvExpanded.has(c.id)
             && !document.querySelector(`.pp-cast-card[data-casting-id="${c.id}"] [data-inv-days]`));
         if (!changed && !undrawn) return;
-        const draw = (tries) => {
+        // Same rule as the live refresh: never under someone who is typing, has unaccepted edits, a dialog open or a
+        // row in hand; it simply waits (no forced redraw). The user's own waiting saves land first.
+        const draw = async () => {
             if (currentProjectNumber !== castDayFor || currentTab !== 'castings') return;
-            const list = document.getElementById('pp-castings-list');
-            if (list && list.contains(document.activeElement) && tries > 0) { setTimeout(() => draw(tries - 1), 2000); return; }
+            if (liveUserBusy() || document.body.classList.contains('pp-inv-dragging')) { setTimeout(draw, 2000); return; }
+            try { await flushPendingSaves(); } catch (e) { /* the redraw shows what is in memory either way */ }
+            if (currentProjectNumber !== castDayFor || currentTab !== 'castings') return;
+            if (liveUserBusy() || document.body.classList.contains('pp-inv-dragging')) { setTimeout(draw, 2000); return; }
             renderCastings();
         };
-        draw(15);
+        draw();
     }).catch(err => logger.warn('[project-portal] cast day from the weekly failed:', err));
 }
 
@@ -2432,6 +2436,7 @@ async function handleDeleteCasting(id) {
     if (!confirm(`Delete casting ${c.casting_number}?`)) return;
     try {
         await deleteCasting(id);
+        if (castDaysCfgBy.has(id)) { castDaysCfgBy.delete(id); setSettingRow(LAYOUT_DAYS_PREFIX + id, null).catch(() => { /* an orphan settings row is harmless */ }); }
         currentCastings = currentCastings.filter(x => x.id !== id);
         currentCastInvExpanded.delete(id);
         currentCastingInventory.delete(id);
@@ -2659,6 +2664,7 @@ function updateCastingInventoryCount(castingId) {
     if (!card) return;
     refreshCastingProjected(card, castingId);
     refreshInvDays(castingId);
+    healCastDays(castingId);
     const countEl = card.querySelector('.pp-cast-card-count');
     if (!countEl) return;
     countEl.innerHTML = castingCountLabelHtml(getInventoryFor(castingId));
@@ -3274,6 +3280,7 @@ async function loadStagingDescriptions() {
         logger.error('[project-portal] fetchAllTasks (staging) failed:', err);
     }
     currentStagingDates = computeStagingDayDates(scheduled);
+    await ensureCastDays();      // split castings name each Cast / Demold day's pieces (2026-11-20)
 
     // Per-casting day index, computed locally so Staging doesn't depend on the shared task
     // cache already carrying castingDayNumber (it won't until the cache refreshes after a
@@ -3369,7 +3376,32 @@ function computeStagingDayDates(tasks) {
     for (const arr of out.values()) arr.sort();
     return out;
 }
+/** Cast / Demold days of a casting split over its cast days: what casts (or is demolded) on that staging day. */
+function stgDayPiecesHtml(castNum, department, day) {
+    if (department !== 'Cast' && department !== 'Demold') return '';
+    const casting = currentCastings.find(c => String(c.casting_number || '').trim() === String(castNum || '').trim());
+    const info = casting ? invDayInfo(casting, getInventoryFor(casting.id)) : null;
+    const from = Number(day);
+    if (!info || !info.split || !(from >= 1 && from <= info.nDays)) return '';
+    let to = from;
+    if (department === 'Demold') {       // Demold day n = Cast day n; a last Demold day with cast days left carries them all
+        let nDemold = 0;
+        for (const k of currentStagingDates.keys()) if (k.startsWith(`${castNum}|Demold|`)) nDemold++;
+        if (!nDemold) return '';
+        if (from === nDemold && nDemold < info.nDays) to = info.nDays;
+        if (from === 1 && to === info.nDays) return '';
+    }
+    const types = new Map();
+    let pcs = 0;
+    for (let d = from; d <= to; d++) { const t = info.totals[d - 1]; pcs += t.pcs; for (const [name, q] of t.types) types.set(name, (types.get(name) || 0) + q); }
+    const list = [...types].map(([name, q]) => `${name} \u00d7${q}`).join(', ');
+    const what = department === 'Cast' ? 'cast on this day' : `demolded on this day (cast day${to > from ? `s ${from}-${to}` : ` ${from}`})`;
+    return `<span class="pp-stg-day-pcs${pcs ? '' : ' pp-stg-day-pcs-none'}" title="${escapeAttr(`This casting is split over ${info.nDays} cast days. Pieces ${what}: ${list || 'none'}. Change it on the Casting Inventory (Day columns) or the Casting Layout tab.`)}">${pcs} pcs</span>`;
+}
 function stgDayDateHtml(castNum, department, day) {
+    return stgDayDateOnlyHtml(castNum, department, day) + stgDayPiecesHtml(castNum, department, day);
+}
+function stgDayDateOnlyHtml(castNum, department, day) {
     if (!currentStagingDatesOk) return '';
     const dates = currentStagingDates.get(`${castNum}|${department}|${day}`);
     if (!dates || !dates.length) return `<span class="pp-stg-day-date pp-stg-day-date-none" title="This day is not on the schedule yet">no date</span>`;
@@ -6463,8 +6495,14 @@ async function loadLayoutDaysFor(ids) {
     return out;
 }
 async function saveLayoutDays() {
-    const has = Object.keys(clDaysCfg.assign).length || Object.keys(clDaysCfg.sides).length;
-    try { await setSettingRow(LAYOUT_DAYS_PREFIX + clSelectedCastingId, has ? clDaysCfg : null); castDaysCfgBy.set(clSelectedCastingId, clDaysCfg); return true; }
+    const id = clSelectedCastingId;
+    const store = castDaysToStore(id, clDaysCfg);
+    try {
+        await setSettingRow(LAYOUT_DAYS_PREFIX + id, layoutDaysEmpty(store) ? null : store);
+        if (layoutDaysEmpty(store)) castDaysCfgBy.delete(id); else castDaysCfgBy.set(id, store);
+        if (clSelectedCastingId === id) clDaysCfg = castDaysCfgOf(id);     // another casting may have been picked meanwhile
+        return true;
+    }
     catch (e) { logger.error('[project-portal] save cast-day split failed:', e); showToast('The cast-day split was not saved: ' + (e.message || e), 'error'); return false; }
 }
 /** The other castings as each cast day sees them: a split casting brings only that day's forms and that day's side. */
@@ -6499,6 +6537,10 @@ function clSetDay(n) {
 /** Move forms of this casting to another cast day. A form that changes day leaves its saved spot behind. */
 async function clMoveToDay(componentIds, n) {
     if (!clMultiDay() || !componentIds.length) return;
+    const forId = clSelectedCastingId;
+    const freshCfg = await refreshCastDaysCfg(forId);   // someone else may have changed the split meanwhile
+    if (!freshCfg || clSelectedCastingId !== forId) return;      // not read, or another casting was picked: nothing changes
+    clDaysCfg = freshCfg;
     const nDays = clDayCount();
     n = Math.min(nDays, Math.max(1, n));
     const all = currentCastingComponents.get(clSelectedCastingId) || [];
@@ -6524,6 +6566,10 @@ async function clUnsplit() {
     const nDays = clDayCount();
     if (!layoutDaysSplit(clDaysCfg, nDays)) return;
     if (!window.confirm('Put every form of this casting back on Day 1?\n\nThe weekly goes back to showing the whole casting on each of its cast days. Saved spots of the forms that move are forgotten.')) return;
+    const forId = clSelectedCastingId;
+    const freshCfg = await refreshCastDaysCfg(forId);
+    if (!freshCfg || clSelectedCastingId !== forId) return;
+    clDaysCfg = freshCfg;
     const all = currentCastingComponents.get(clSelectedCastingId) || [];
     const keys = placeKeys(all);
     const moved = all.filter((c, i) => layoutDayOf(clDaysCfg, keys[i], nDays) > 1).map(c => c.id);
@@ -6608,7 +6654,7 @@ async function loadCastDayContext() {
         }
         const castTasks = tasks.filter(t => t.department === 'Cast' && parseDate(t.date));
         const isMine = t => String(t.projectNumber || '').trim() === pn && String(t.castingNumber || '').trim() === cn;
-        let dates = [...new Set(castTasks.filter(isMine).map(t => isoDay(parseDate(t.date))))].sort();
+        let dates = castDayDates(castTasks.filter(isMine).map(t => ({ iso: isoDay(parseDate(t.date)), day: t.castingDayNumber })));   // Day n = the card with staging day n
         let source = dates.length ? 'weekly' : '';
         if (!dates.length && isoOfDate(casting.casting_date)) { dates = [isoOfDate(casting.casting_date)]; source = 'portal'; }
         clDay.dates = dates; clDay.source = source;
@@ -6629,7 +6675,7 @@ async function loadCastDayContext() {
             if (isMine(t)) continue;
             const tpn = String(t.projectNumber || '').trim(), tcn = String(t.castingNumber || '').trim();
             const e = byKey.get(tpn ? `${tpn}|${tcn}` : `name|${String(t.project || '').trim().toLowerCase()}`);
-            if (e) e.allDates.add(isoDay(parseDate(t.date)));
+            if (e) e.allDates.add(isoDay(parseDate(t.date)) + '|' + (t.castingDayNumber || ''));
         }
         if (!byKey.size) return;
         // Portal records of those castings (side, forms, saved layout, special condition) by job + cast number.
@@ -6645,7 +6691,7 @@ async function loadCastDayContext() {
                 projectName: e.project_number ? (clProjectNames.get(e.project_number) || e.taskName) : e.taskName,
                 casting_side: ['A', 'B', 'AB'].includes(r?.casting_side) ? r.casting_side : e.taskSide,
                 inPortal: !!r,
-                dates: [...e.dates].sort(), allDates: [...e.allDates].sort(),
+                dates: [...e.dates].sort(), allDates: castDayDates([...e.allDates].map(x => ({ iso: x.split('|')[0], day: x.split('|')[1] }))),
                 cond: null, components: [], positions: []
             };
         });
@@ -6948,8 +6994,9 @@ async function loadLayoutPositionsForSelected() {
             : [];
         clBases = clSelectedCastingId ? ((await loadLayoutBasesFor([clSelectedCastingId])).get(clSelectedCastingId) || {}) : {};
         if (clDaysFor !== clSelectedCastingId) { clDaysFor = clSelectedCastingId; clDayN = 1; }
-        clDaysCfg = (clSelectedCastingId && (await loadLayoutDaysFor([clSelectedCastingId])).get(clSelectedCastingId)) || { assign: {}, sides: {} };
-        if (clSelectedCastingId) castDaysCfgBy.set(clSelectedCastingId, clDaysCfg);   // the Casting Inventory and Tracking read the same split
+        if (clSelectedCastingId && currentCastingInventoryLoadedFor !== currentProjectNumber) await loadAllInventoryForCurrentProject();   // the split is read against the inventory
+        // the Casting Inventory and Tracking read the same split; a failed read keeps the copy in memory (and says so)
+        clDaysCfg = clSelectedCastingId ? ((await refreshCastDaysCfg(clSelectedCastingId)) || castDaysCfgOf(clSelectedCastingId)) : { assign: {}, sides: {} };
         if (Array.isArray(clLayoutPositions) && clLayoutPositions.length) markWorking(clSelectedCastingId, 'Casting Layout', 'Forms laid out', true);
     } catch (e) {
         logger.error('[project-portal] loadLayoutPositions failed:', e);
@@ -7232,10 +7279,12 @@ function printCastingLayoutNow() {
     let pages = [];
     if (clMultiDay()) {
         const nDays = clDayCount(), keep = clDayN;
-        const days = layoutDaysSplit(clDaysCfg, nDays) ? clDay.dates.map((_, i) => i + 1).filter(n => clCompsOfDay(n).length) : [clDayN];
+        const split = layoutDaysSplit(clDaysCfg, nDays);
+        // not split: every form is on Day 1, so that is the sheet, without a DAY label (the casting is not planned by day)
+        const days = split ? clDay.dates.map((_, i) => i + 1).filter(n => clCompsOfDay(n).length) : [1];
         for (const n of days) {
             if (n !== clDayN) { clDayN = n; renderCastingLayoutTab(); }
-            const label = `DAY ${n} OF ${nDays} \u00b7 ${clDayLabel(clDay.dates[n - 1])}`;
+            const label = split ? `DAY ${n} OF ${nDays} \u00b7 ${clDayLabel(clDay.dates[n - 1])}` : '';
             for (const svg of collect()) pages.push({ svg, label });
         }
         if (clDayN !== keep) { clDayN = keep; renderCastingLayoutTab(); }
@@ -10263,6 +10312,10 @@ function wireEvents() {
         try {
             if (dayN > 1) {
                 // a later cast day keeps its own side with the split; "not set" = the casting's own side again
+                const forId = clSelectedCastingId;
+                const freshCfg = await refreshCastDaysCfg(forId);
+                if (!freshCfg || clSelectedCastingId !== forId) { e.target.value = prevSide; return; }
+                clDaysCfg = freshCfg;
                 if (side) clDaysCfg.sides[String(dayN)] = side; else delete clDaysCfg.sides[String(dayN)];
                 if (await saveLayoutDays()) showToast(`Cast ${casting.casting_number}, Day ${dayN}: ${side === 'AB' ? 'both sides (A + B)' : side ? 'Side ' + side : "the casting's own side"} — the weekly's Cast card of that day follows on its next refresh.`);
             } else {
@@ -12787,6 +12840,8 @@ let weeklyCastDates = null;      // Map casting_number (trimmed) -> 'YYYY-MM-DD'
 let weeklyCastDatesFor = null;   // project number the map belongs to
 let weeklyCastLastDates = null;  // Map casting_number -> 'YYYY-MM-DD' (last Cast day: a casting poured over several days is cast once that one is over)
 let weeklyCastAllDates = null;   // Map casting_number -> every Cast day, sorted (2026-11-20: Day 1, Day 2, ...)
+let weeklyCastDatesOk = false;   // false = the last read of the weekly failed (cast days unknown, not "none")
+let castDaysCfgOk = false;       // false = the stored splits could not be read
 
 function isoDay(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function shortDay(iso) { const d = new Date(iso + 'T00:00:00'); return isNaN(d) ? iso : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
@@ -12797,8 +12852,10 @@ async function loadWeeklyCastDates(projectNumber) {
     const last = new Map();
     const every = new Map();
     if (!pn) return map;
+    let ok = true;
     try {
         const all = await fetchAllTasks();
+        if (!all || !all.length) ok = false;      // the weekly never has no cards at all: it did not answer
         for (const t of (all || [])) {
             if (t.department !== 'Cast') continue;
             if (String(t.projectNumber || '').trim() !== pn) continue;
@@ -12809,15 +12866,17 @@ async function loadWeeklyCastDates(projectNumber) {
             const iso = isoDay(d);
             if (!map.has(cn) || iso < map.get(cn)) map.set(cn, iso);
             if (!last.has(cn) || iso > last.get(cn)) last.set(cn, iso);
-            if (!every.has(cn)) every.set(cn, new Set());
-            every.get(cn).add(iso);
+            if (!every.has(cn)) every.set(cn, []);
+            every.get(cn).push({ iso, day: t.castingDayNumber });
         }
     } catch (err) {
+        ok = false;
         logger.error('[batch-tickets] weekly cast dates failed:', err);
     }
     if (String(currentProjectNumber || '').trim() === pn) {
+        weeklyCastDatesOk = ok;
         weeklyCastDates = map; weeklyCastLastDates = last; weeklyCastDatesFor = pn;
-        weeklyCastAllDates = new Map([...every].map(([cn, set]) => [cn, [...set].sort()]));
+        weeklyCastAllDates = new Map([...every].map(([cn, cards]) => [cn, castDayDates(cards)]));   // Day n = the card with staging day n
     }
     return map;
 }
@@ -12835,25 +12894,78 @@ function castDatesOf(c) {
     if (!c || !weeklyCastAllDates || weeklyCastDatesFor !== pn) return [];
     return weeklyCastAllDates.get(String(c.casting_number || '').trim()) || [];
 }
-function castDaysCfgOf(castingId) { return castDaysCfgBy.get(castingId) || { assign: {}, sides: {} }; }
+/** A casting's split as it reads NOW: each inventory row keeps its numbers per day through renames, reorders and
+ *  quantity changes (resolveLayoutDays). Without the inventory at hand the stored piece list is used as it is. */
+function castDaysCfgOf(castingId) {
+    const raw = castDaysCfgBy.get(castingId);
+    if (!raw) return { assign: {}, sides: {} };
+    return castDaysHaveInv(castingId) ? resolveLayoutDays(raw, getInventoryFor(castingId)) : normLayoutDays(raw);
+}
+/** This casting's inventory rows are in memory (casting ids are unique, so they can only be its own). */
+function castDaysHaveInv(castingId) { return currentCastingInventory.has(castingId) && getInventoryFor(castingId).length > 0; }
+/** Re-read one casting's split from the server (before changing it: someone else may have changed it meanwhile).
+ *  @returns the split, or NULL when it could not be read: the caller must then change nothing (a save made from
+ *  "nothing stored" would wipe a split that is really there). */
+async function refreshCastDaysCfg(castingId) {
+    try {
+        const rows = await loadSettingRows([LAYOUT_DAYS_PREFIX + castingId], { strict: true });
+        const v = rows.get(LAYOUT_DAYS_PREFIX + castingId);
+        if (v) castDaysCfgBy.set(castingId, normLayoutDays(v)); else castDaysCfgBy.delete(castingId);
+    } catch (e) {
+        logger.error('[project-portal] cast-day split re-read failed', e);
+        showToast('Could not read the cast-day split just now, so nothing was changed. Try again in a moment.', 'error', 6000);
+        return null;
+    }
+    return castDaysCfgOf(castingId);
+}
+/** One change at a time per casting: a second Day box waits for the first one's save, so neither undoes the other. */
+const castDaysQueue = new Map();
+function castDaysEnqueue(castingId, job) {
+    const next = (castDaysQueue.get(castingId) || Promise.resolve()).then(job, job);
+    castDaysQueue.set(castingId, next.catch(() => {}));
+    return next;
+}
+/** A split ready to store: the pieces, the sides, and the per-row numbers the pieces add up to. */
+function castDaysToStore(castingId, cfg) {
+    const out = { assign: { ...cfg.assign }, sides: { ...cfg.sides } };
+    if (castDaysHaveInv(castingId)) out.rows = layoutDayRows(out.assign, getInventoryFor(castingId));
+    return out;
+}
 async function loadCastDaysCfgs() {
     const pn = currentProjectNumber;
     const ids = currentCastings.filter(c => castDatesOf(c).length > 1).map(c => c.id);
-    const map = await loadLayoutDaysFor(ids);
+    const map = new Map();
+    try {
+        const rows = ids.length ? await loadSettingRows(ids.map(id => LAYOUT_DAYS_PREFIX + id), { strict: true }) : new Map();
+        for (const [k, v] of rows) map.set(k.slice(LAYOUT_DAYS_PREFIX.length), normLayoutDays(v));
+    } catch (e) {
+        logger.warn('[project-portal] cast-day splits could not be read: what is on screen stays', e);
+        if (currentProjectNumber === pn) castDaysCfgOk = false;
+        return false;
+    }
     if (currentProjectNumber !== pn) return false;
-    const sig = m => JSON.stringify([...m].sort((a, b) => a[0] < b[0] ? -1 : 1));
+    const sig = m => JSON.stringify([...m].map(([id, cfg]) => [id, layoutDaysCanon(cfg)]).sort((a, b) => a[0] < b[0] ? -1 : 1));
     const changed = sig(map) !== sig(castDaysCfgBy);
     castDaysCfgBy = map;
+    castDaysCfgOk = true;
     return changed;
 }
-/** The weekly's cast days + the stored splits, ready for a screen or a print that shows days. */
+/** The weekly's cast days + the stored splits, ready for a screen or a print that shows days.
+ *  @returns false when the weekly or the splits could not be read: day by day is then UNKNOWN, not "not split". */
 async function ensureCastDays() {
     const pn = String(currentProjectNumber || '').trim();
-    if (!pn) return;
+    if (!pn) return true;
     try {
-        if (!weeklyCastAllDates || weeklyCastDatesFor !== pn) await loadWeeklyCastDates(pn);
+        if (!weeklyCastAllDates || weeklyCastDatesFor !== pn || !weeklyCastDatesOk) await loadWeeklyCastDates(pn);
+        if (currentCastingInventoryLoadedFor !== currentProjectNumber && !currentCastings.every(c => currentCastingInventory.has(c.id))) await loadAllInventoryForCurrentProject();   // the split is read against the inventory
         await loadCastDaysCfgs();
-    } catch (e) { logger.warn('[project-portal] cast days unavailable', e); }
+    } catch (e) { logger.warn('[project-portal] cast days unavailable', e); return false; }
+    return weeklyCastDatesOk && castDaysCfgOk;
+}
+/** Before a print that goes day by day: say so when the days could not be read (it would print as one list). */
+async function ensureCastDaysForPrint(what) {
+    if (await ensureCastDays()) return;
+    showToast(`The cast days could not be read from the weekly just now: ${what} print as ONE list. If this casting is split over its cast days, print again in a moment.`, 'error', 9000);
 }
 /** The panels of a SPLIT casting day by day: [{ n, of, date, comps }]. null = not split (one list, as before). */
 function castDayGroups(casting, components) {
@@ -12872,7 +12984,7 @@ function invDayInfo(casting, items) {
     if (nDays < 2) return null;
     const cfg = castDaysCfgOf(casting.id);
     const byRow = new Map(), keysByRow = new Map();
-    const totals = dates.map(() => ({ pcs: 0, cu: 0, ff: 0 }));
+    const totals = dates.map(() => ({ pcs: 0, cu: 0, ff: 0, types: new Map() }));
     for (const { key, row } of inventoryPieceRows(items)) {
         const d = layoutDayOf(cfg, key, nDays);
         if (!byRow.has(row.id)) { byRow.set(row.id, dates.map(() => 0)); keysByRow.set(row.id, []); }
@@ -12880,6 +12992,8 @@ function invDayInfo(casting, items) {
         keysByRow.get(row.id).push(key);
         const t = totals[d - 1];
         t.pcs++; t.cu += Number(row.cu_ft) || 0; t.ff += Number(row.ff_sq_ft) || 0;
+        const name = String(row.type || '').trim() || '(no type)';
+        t.types.set(name, (t.types.get(name) || 0) + 1);
     }
     return { dates, nDays, cfg, byRow, keysByRow, totals, split: layoutDaysSplit(cfg, nDays) };
 }
@@ -12917,15 +13031,15 @@ function invDayCellsHtml(item, info) {
     const pcs = c.reduce((a, b) => a + b, 0);
     return info.dates.map((d, i) => i === 0
         ? `<span class="pp-inv-input pp-inv-day-cell" data-inv-day1 title="${escapeAttr(`Pieces of this row that cast on Day 1 \u00b7 ${castDayLong(d)}: whatever is not on a later day`)}">${c[0]}</span>`
-        : `<input type="number" class="pp-inv-input pp-inv-day-input" data-inv-day="${i + 1}" min="0" max="${pcs}" step="1" placeholder="0" value="${c[i] ? c[i] : ''}" title="${escapeAttr(`How many of this row's ${pcs} piece${pcs === 1 ? '' : 's'} (qty + extras) cast on Day ${i + 1} \u00b7 ${castDayLong(d)}. The rest stay on Day 1.`)}" />`).join('');
+        : `<input type="number" class="pp-inv-input pp-inv-day-input" data-inv-day="${i + 1}" tabindex="-1" min="0" max="${pcs}" step="1" placeholder="0" value="${c[i] ? c[i] : ''}" title="${escapeAttr(`How many of this row's ${pcs} piece${pcs === 1 ? '' : 's'} (qty + extras) cast on Day ${i + 1} \u00b7 ${castDayLong(d)}. The rest stay on Day 1.`)}" />`).join('');
 }
 /** Store a casting's split; forms that changed day leave their saved spot on the layout tables behind. */
 async function saveCastDaysCfg(castingId, cfg, movedKeys) {
-    const has = Object.keys(cfg.assign).length || Object.keys(cfg.sides).length;
-    try { await setSettingRow(LAYOUT_DAYS_PREFIX + castingId, has ? cfg : null); }
+    const store = castDaysToStore(castingId, cfg);
+    try { await setSettingRow(LAYOUT_DAYS_PREFIX + castingId, layoutDaysEmpty(store) ? null : store); }
     catch (e) { logger.error('[project-portal] save cast-day split failed:', e); showToast('The cast-day split was not saved: ' + (e.message || e), 'error'); return false; }
-    castDaysCfgBy.set(castingId, cfg);
-    if (clSelectedCastingId === castingId) clDaysCfg = cfg;
+    if (layoutDaysEmpty(store)) castDaysCfgBy.delete(castingId); else castDaysCfgBy.set(castingId, store);
+    if (clSelectedCastingId === castingId) clDaysCfg = castDaysCfgOf(castingId);
     if (movedKeys && movedKeys.length) {
         try {
             const comps = getComponentsFor(castingId) || [];
@@ -12939,13 +13053,24 @@ async function saveCastDaysCfg(castingId, cfg, movedKeys) {
     return true;
 }
 /** A Day 2+ box of a row was changed: move that many of the row's pieces to (or back from) that day. */
-async function handleInvDayInput(input) {
+function handleInvDayInput(input) {
     const row = input.closest('.pp-inv-row[data-inventory-id]');
     if (!row) return;
     const castingId = row.getAttribute('data-casting-id'), itemId = row.getAttribute('data-inventory-id');
-    const casting = currentCastings.find(c => c.id === castingId);
-    const info = casting ? invDayInfo(casting, getInventoryFor(castingId)) : null;
     const day = parseInt(input.dataset.invDay, 10);
+    const typed = input.value;                 // what was typed, read now: the box may be redrawn while this waits its turn
+    return castDaysEnqueue(castingId, () => applyInvDayInput(castingId, itemId, day, typed));
+}
+async function applyInvDayInput(castingId, itemId, day, typed) {
+    const pn = currentProjectNumber;
+    const casting = currentCastings.find(c => c.id === castingId);
+    if (!casting) return;
+    const fresh = await refreshCastDaysCfg(castingId);       // someone else may have changed the split meanwhile
+    if (currentProjectNumber !== pn) return;
+    const box = () => document.querySelector(`.pp-inv-row[data-inventory-id="${itemId}"] .pp-inv-day-input[data-inv-day="${day}"]`);
+    if (!fresh) { refreshInvDays(castingId, { force: box() }); return; }      // not read: nothing changed, the box goes back
+    const info = invDayInfo(casting, getInventoryFor(castingId));
+    const input = { value: typed };
     if (!info || !(day > 1 && day <= info.nDays)) return;
     const keys = info.keysByRow.get(itemId) || [];
     const cfg = { assign: { ...info.cfg.assign }, sides: { ...info.cfg.sides } };
@@ -12964,19 +13089,51 @@ async function handleInvDayInput(input) {
     if (want > on.length) for (const k of day1.slice(day1.length - (want - on.length))) { cfg.assign[k] = day; moved.push(k); }
     else if (want < on.length) for (const k of on.slice(0, on.length - want)) { delete cfg.assign[k]; moved.push(k); }
     if (moved.length) await saveCastDaysCfg(castingId, cfg, moved);
-    refreshInvDays(castingId);
+    if (currentProjectNumber !== pn) return;
+    refreshInvDays(castingId, { force: box() });      // the box that was changed shows what was stored (a number that was cut back)
 }
-async function handleInvDaysClear(castingId) {
-    const casting = currentCastings.find(c => c.id === castingId);
-    const info = casting ? invDayInfo(casting, getInventoryFor(castingId)) : null;
-    if (!info || !info.split) return;
+function handleInvDaysClear(castingId) {
     if (!window.confirm('Put every piece of this casting back on Day 1?\n\nThe weekly goes back to showing the whole casting on each of its cast days, and Tracking, the labels and the layout go back to one list.')) return;
-    const moved = Object.keys(info.cfg.assign);
-    if (await saveCastDaysCfg(castingId, { assign: {}, sides: { ...info.cfg.sides } }, moved)) showToast('Every piece is back on Day 1.', 'success');
-    refreshInvDays(castingId);
+    return castDaysEnqueue(castingId, async () => {
+        const pn = currentProjectNumber;
+        const casting = currentCastings.find(c => c.id === castingId);
+        if (!casting || !(await refreshCastDaysCfg(castingId)) || currentProjectNumber !== pn) return;
+        const info = invDayInfo(casting, getInventoryFor(castingId));
+        if (info && info.split) {
+            const moved = Object.keys(info.cfg.assign);
+            if (await saveCastDaysCfg(castingId, { assign: {}, sides: { ...info.cfg.sides } }, moved)) showToast('Every piece is back on Day 1.', 'success');
+        }
+        if (currentProjectNumber === pn) refreshInvDays(castingId, { force: true });
+    });
 }
-/** Redraw only the day parts of one casting card (the boxes being typed in stay where they are). */
-function refreshInvDays(castingId) {
+/** After an inventory edit: when the row numbers now land on other pieces than the stored ones (a type renamed, a
+ *  quantity changed, rows reordered), store the pieces as they read now, so every screen without the inventory at
+ *  hand (another job's layout day) sees the same. Quiet: nothing changes on screen. */
+const castDaysHealTimers = new Map();
+function healCastDays(castingId) {
+    const raw = castDaysCfgBy.get(castingId);
+    if (!raw || !raw.rows) return;
+    clearTimeout(castDaysHealTimers.get(castingId));
+    const pn = currentProjectNumber;
+    castDaysHealTimers.set(castingId, setTimeout(() => {
+        castDaysHealTimers.delete(castingId);
+        if (currentProjectNumber !== pn) return;                 // another job is open now: its inventory is not this casting's
+        castDaysEnqueue(castingId, async () => {
+            const now = castDaysCfgBy.get(castingId);
+            if (currentProjectNumber !== pn || !now || !now.rows || !castDaysHaveInv(castingId)) return;
+            const store = castDaysToStore(castingId, castDaysCfgOf(castingId));
+            if (layoutDaysCanon(store) === layoutDaysCanon(now)) return;
+            try {
+                await setSettingRow(LAYOUT_DAYS_PREFIX + castingId, layoutDaysEmpty(store) ? null : store);
+                if (layoutDaysEmpty(store)) castDaysCfgBy.delete(castingId); else castDaysCfgBy.set(castingId, store);
+                if (clSelectedCastingId === castingId) clDaysCfg = castDaysCfgOf(castingId);
+            } catch (e) { logger.warn('[project-portal] cast-day split follow-up save failed (it is still read correctly here)', e); }
+        });
+    }, 1500));
+}
+/** Redraw only the day parts of one casting card. The Day box someone is typing in is left alone (opts.force: that
+ *  one box, or true for all of them, is written anyway: it was just stored or undone). */
+function refreshInvDays(castingId, opts = {}) {
     const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
     const casting = currentCastings.find(c => c.id === castingId);
     if (!card || !casting) return;
@@ -12994,8 +13151,9 @@ function refreshInvDays(castingId) {
         if (d1) d1.textContent = c[0];
         r.querySelectorAll('.pp-inv-day-input').forEach(inp => {
             const n = c[parseInt(inp.dataset.invDay, 10) - 1] || 0;
-            inp.value = n ? n : '';
             inp.max = pcs;
+            if (inp === document.activeElement && opts.force !== true && opts.force !== inp) return;   // being typed in
+            inp.value = n ? n : '';
         });
     });
 }
@@ -14027,7 +14185,7 @@ function buildTrackPrintHtml(casting, components, projectNumber, projectName, da
 async function handlePrintTracking(castingId) {
     if (!castingId) return;
     if (!(await printGate([castingId], 'Final Tracking'))) return;
-    await ensureCastDays();
+    await ensureCastDaysForPrint('the tracking sheet will');
     msArmStamp([castingId], 'Final Tracking');
     handlePrintTrackingNow(castingId);
 }
@@ -14051,7 +14209,9 @@ function handlePrintTrackingNow(castingId) {
     if (dayGroups.length > 1) {
         const docs = dayGroups.map(g => buildTrackPrintHtml(casting, g.comps, projectNumber, projectName, g));
         const bodyOf = d => d.slice(d.indexOf('<body>') + 6, d.lastIndexOf('</body>'));
-        html = docs[0].replace('</body>', docs.slice(1).map(d => `<div style="break-before:page;page-break-before:always;">${bodyOf(d)}</div>`).join('') + '</body>');
+        const more = docs.slice(1).map(d => `<div style="break-before:page;page-break-before:always;">${bodyOf(d)}</div>`).join('');
+        const at = docs[0].lastIndexOf('</body>');
+        html = docs[0].slice(0, at) + more + docs[0].slice(at);
     } else {
         html = buildTrackPrintHtml(casting, components, projectNumber, projectName, dayGroups[0] || null);
     }
@@ -14364,7 +14524,7 @@ function buildStickerPrintHtml(casting, components, projectName) {
 async function handlePrintStickers(castingId) {
     if (!castingId) return;
     if (!(await printGate([castingId], 'Labels'))) return;
-    await ensureCastDays();
+    await ensureCastDaysForPrint('the labels will');
     msArmStamp([castingId], 'Labels');
     return handlePrintStickersNow(castingId);
 }
