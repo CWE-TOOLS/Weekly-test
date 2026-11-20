@@ -4,6 +4,7 @@
 <script>
 (function () {
   window.__TYPE_MASTER_PREFIX = 'type_master_test:';   // test-site master lists never become a real job's list
+  window.__LAYOUT_DAYS_PREFIX = 'layout_days_test:';   // test-site cast-day splits never become a real casting's split
   var realFetch = window.fetch.bind(window);
   var TEST_SHEET = '';
   var MILL_MOVES = [];   // preview only: [job, cast, day] Mill staging notes shown as Parts (the real rename runs after the sheet swap)   // set when this copy reads a different Google Sheet: it must not share the live cache
@@ -80,7 +81,7 @@
     var bar = document.createElement('div');
     bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b91c1c;color:#fff;' +
       'font:700 13px/1.4 Segoe UI,Arial,sans-serif;padding:6px 14px;display:flex;gap:14px;justify-content:center;letter-spacing:.3px';
-    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. The Type master list saves too, in a test-only copy. Everything else resets on refresh.</span>' +
+    bar.innerHTML = '<span>TEST SITE — READ-ONLY, except crates, trucks, the Releasability milestones / inventory lock and job 0860 casting "Test": those save to the real portal so you can try them. The Type master list and the cast-day split of the Casting Layout save too, in test-only copies. Everything else resets on refresh.</span>' +
       '<span id="ro-test-count" style="font-weight:400;opacity:.9">0 saves blocked</span>';
     document.body.appendChild(bar);
   });
@@ -96,7 +97,7 @@
     <link rel="stylesheet" href="src/styles/variables.css">
     <link rel="stylesheet" href="src/styles/base.css">
     <link rel="stylesheet" href="src/styles/buttons.css">
-    <link rel="stylesheet" href="src/styles/project-portal.css?v=20261119-8">
+    <link rel="stylesheet" href="src/styles/project-portal.css?v=20261120-1">
 
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 </head>
@@ -641,7 +642,7 @@
                                     <select id="pp-clay-casting" class="pp-clay-select"></select>
                                 </label>
                                 <label class="pp-clay-ctrl" title="Side A / Side B of this casting — the weekly's Cast cards show and edit the same value">
-                                    <span>Casting side</span>
+                                    <span id="pp-clay-side-label">Casting side</span>
                                     <select id="pp-clay-side" class="pp-clay-select">
                                         <option value="">— not set (forms shown on Side B) —</option>
                                         <option value="A">Side A</option>
@@ -661,6 +662,9 @@
                                 <button id="pp-clay-print-btn" class="pp-secondary-btn pp-clay-print" type="button">Print Layout</button>
                                 <button id="pp-clay-reset-btn" class="pp-secondary-btn pp-clay-reset" type="button" hidden>Reset to auto-pack</button>
                             </div>
+
+                            <!-- Cast days (2026-11-20): one bubble per Cast day of the weekly, only for a casting with two or more -->
+                            <div id="pp-clay-days" class="pp-clay-days" hidden></div>
 
                             <div id="pp-clay-fit-result" class="pp-clay-fit-result"></div>
                             <div id="pp-clay-error" class="pp-clay-error"></div>
@@ -1387,7 +1391,7 @@
         <div id="pp-toast" class="pp-toast" hidden></div>
     </div>
 
-    <script type="module" src="src/pages/project-portal/project-portal-page.js?v=20261119-7"></script>
+    <script type="module" src="src/pages/project-portal/project-portal-page.js?v=20261120-1"></script>
     <script type="module" src="src/utils/auto-update.js?v=20261023-1"></script>
 </body>
 </html>
