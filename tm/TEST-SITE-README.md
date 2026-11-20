@@ -1,4 +1,4 @@
 # Weekly-test / tm
 
-Read-only TEST copy of the portal with the TYPE MASTER LIST, built from branch `type-master` at `df155cf`.
+Read-only TEST copy of the portal with the TYPE MASTER LIST, built from branch `type-master` at `0f036ac`.
 This folder is kept when the root of the test site is rebuilt.
