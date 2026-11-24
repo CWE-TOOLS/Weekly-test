@@ -111,7 +111,7 @@ import {
     roundSig,
     FROM_LBS
 } from '../../utils/batch-calc.js';
-import { getSpecialBatching } from '../../config/special-batching.js?v=20261109-1';
+import { getSpecialBatching } from '../../config/special-batching.js?v=20261124-1';
 import { fetchAllTasks } from '../../services/data-service.js';
 import { loadActualHoursForProject } from '../../services/actual-hours-service.js';
 import { parseDate } from '../../utils/date-utils.js';
@@ -134,7 +134,7 @@ import { LAYOUT_DAYS_PREFIX, normLayoutDays, resolveLayoutDays, layoutDayRows, l
 import { activateJigListTab } from './jig-list.js?v=20261112-1';
 import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js?v=20261119-1';
 import { SLUMP_TARGET_DEFAULTS, FINAL_BACKUP_PIG_REDUCTION_PCT, parsePigReduction, BT_IMPORT_META, btOverrides, btImportStamp, btStampDate, additiveAmount, batchTotalsRows, renderBatchTotals, clampSlumpTarget, formatSlumpLabel, renderSlumpGraphic, renderBatchTicketCard, BATCH_PRINT_CSS } from '../../services/batch-ticket-render.js';
-import { finishingProductsHtml, faceSqFtOfInventory } from '../../services/finishing-products.js?v=20261106-1';   // moved out 2026-10-30 so the weekly's week print shares the ticket code
+import { finishingProductsHtml, faceSqFtOfInventory, loadFinishingDefs, initFinishingEditor } from '../../services/finishing-products.js?v=20261124-1';   // moved out 2026-10-30 so the weekly's week print shares the ticket code
 import { invHash as invHashShared, invFingerprintRows, invColourFingerprintRows } from '../../services/inventory-marks.js';
 import { loadMilestonesForProject, saveMilestone, isMilestonesMigrationPending, loadLayoutConditions, loadLayoutConditionsForCastings, LAYOUT_CONDITION_PREFIX, layoutConditionNote, parseLayoutCondition, sideWords } from '../../services/milestones-service.js';
 import { loadJigListsForProject as loadJigListsForScrim, scrimForInventory } from '../../services/jig-list-service.js?v=20261112-1';
@@ -148,7 +148,7 @@ import {
 } from '../../services/casting-layout-service.js';
 import { registerRefreshHandler, isPortalChange, isOwnSignal, signalInfo } from '../../services/supabase-service.js';
 // Type master list (2026-11-11): the job's types + totals above the castings; casting rows pick their type from it.
-import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, TM_NEW } from './type-master.js?v=20261119-4';
+import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, typeMasterFillButtonHtml, typeMasterFill, TM_NEW } from './type-master.js?v=20261123-1';
 import { initInventorySearch, renderInventorySearch } from './inventory-search.js?v=20261116-1';
 import '../../utils/number-wheel-guard.js';   // the mouse wheel must not change a focused hour box (user 2026-11-03)
 
@@ -586,6 +586,7 @@ async function showListView() {
     document.getElementById('pp-list-view').hidden = false;
     document.getElementById('pp-form-view').hidden = true;
     updateFloats();   // hides the batching floats (castings box, out-of-date warning) and the Releasability bar
+    renderClayFloat();   // and the Casting Layout's cast-day box: it floats over the page, so it must go with the project
     const memosView = document.getElementById('pp-memos-view');
     if (memosView) memosView.hidden = true;
     const scViewLV = document.getElementById('pp-standards-view');
@@ -1496,7 +1497,7 @@ function renderCastings() {
     list.querySelectorAll('.pp-cast-card').forEach(card => {
         if (!ciLockedById(card.dataset.castingId)) return;
         card.classList.add('pp-cast-card-locked');
-        card.querySelectorAll('.pp-inv-row input:not(.pp-inv-day-input), .pp-inv-row select, .pp-inv-add, .pp-inv-import-remakes, [data-action="paste-components"], [data-action="cut-selected"], .pp-inv-row-cut, .pp-inv-row-delete, .pp-inv-row-select, .pp-inv-select-all')
+        card.querySelectorAll('.pp-inv-row input:not(.pp-inv-day-input), .pp-inv-row select, .pp-inv-add, .pp-inv-import-remakes, .pp-inv-fill-master, [data-action="paste-components"], [data-action="cut-selected"], .pp-inv-row-cut, .pp-inv-row-delete, .pp-inv-row-select, .pp-inv-select-all')
             .forEach(el => { el.disabled = true; });
     });
 
@@ -1622,6 +1623,7 @@ function renderInventoryBody(casting, items) {
             </div>
             <button type="button" class="pp-add-btn pp-inv-add" data-action="add-inventory" data-casting-id="${escapeAttr(casting.id)}">+ Add Component</button>
             <button type="button" class="pp-add-btn pp-inv-import-remakes" data-action="open-import-remakes" data-casting-id="${escapeAttr(casting.id)}" ${candidateCount === 0 ? 'disabled' : ''} title="${escapeAttr(importTitle)}">${escapeHtml(importLabel)}</button>
+            ${typeMasterFillButtonHtml(casting.id)}
         </div>
     `;
 }
@@ -8627,6 +8629,7 @@ async function showStandardColorsView() {
     document.getElementById('pp-list-view').hidden = true;
     document.getElementById('pp-form-view').hidden = true;
     updateMsFloat();
+    renderClayFloat();   // the Casting Layout's cast-day box goes with the project
     const memosView = document.getElementById('pp-memos-view');
     if (memosView) memosView.hidden = true;
     const scView = document.getElementById('pp-standards-view');
@@ -9786,6 +9789,7 @@ async function showRecentMemosView() {
     document.getElementById('pp-list-view').hidden = true;
     document.getElementById('pp-form-view').hidden = true;
     updateMsFloat();
+    renderClayFloat();   // the Casting Layout's cast-day box goes with the project
     const memosView = document.getElementById('pp-memos-view');
     if (memosView) memosView.hidden = false;
     const scViewRM = document.getElementById('pp-standards-view');
@@ -11345,6 +11349,9 @@ function wireEvents() {
             handleAddInventoryItem(castingId);
         } else if (action === 'open-import-remakes') {
             if (!btn.disabled) openImportRemakesModal(castingId);
+        } else if (action === 'fill-from-master') {
+            // a value still being typed is saved first, so the fill sees the rows as they are
+            if (!btn.disabled) flushPendingSaves().then(() => typeMasterFill(castingId));
         } else if (action === 'copy-components') {
             if (!btn.disabled) handleCopyComponents(castingId);
         } else if (action === 'paste-components') {
@@ -11843,6 +11850,9 @@ async function ensureJigListsForScrim() {
 }
 /** The scrim line for a casting: face sq ft from the Casting Inventory × scrim layers from the Jig List cross-section. */
 /** Finishing & sealing products for the casting's finished face, off its colour logs' notes (2026-11-06). */
+// 2026-11-24: products and rates are defined in the portal (one shared settings row, read on every opening of the
+// tab); the block's own buttons open the rate pop-up, and a saved rate redraws the totals.
+initFinishingEditor({ onChange: () => renderBatchTicketsContent(), toast: (msg, kind) => showToast(msg, kind, 5000) });
 function finishingLineHtml(casting, entries, day = null) {
     if (!casting) return '';
     const logs = [];
@@ -11861,7 +11871,7 @@ function scrimLineHtml(casting, day = null) {
 }
 async function activateBatchTicketsTab() {
     if (currentProjectNumber) syncCastDatesWithWeekly();   // runs alongside; redraws when the weekly answers
-    await ensureJigListsForScrim();
+    await Promise.all([ensureJigListsForScrim(), loadFinishingDefs()]);
     const needsSave    = document.getElementById('pp-bt-needs-save');
     const needsCL      = document.getElementById('pp-bt-needs-color-log');
     const noCastings   = document.getElementById('pp-bt-no-castings');
