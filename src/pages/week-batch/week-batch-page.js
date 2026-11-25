@@ -23,9 +23,12 @@ import { loadAllInventoryForProject } from '../../services/inventory-service.js'
 import { loadMilestonesForProjects, saveMilestone } from '../../services/milestones-service.js';
 import { MS, milestonesApply } from '../../config/milestones-config.js';
 import { getSpecialBatching } from '../../config/special-batching.js';
-import { buildTicketPages, batchTotalsRows, sumTotalsRows, renderTotalsTable, BATCH_PRINT_CSS, SLUMP_TARGET_DEFAULTS, clampSlumpTarget, staleVerdict, activeColorLogFor } from '../../services/batch-ticket-render.js';
-import { EARLY_PRINT_NOTE, invEarlyMarksRows, withInvMark } from '../../services/inventory-marks.js';
+import { buildTicketPages, batchTotalsRows, sumTotalsRows, renderTotalsTable, BATCH_PRINT_CSS, SLUMP_TARGET_DEFAULTS, clampSlumpTarget, staleVerdict, activeColorLogFor, leftOverTicket } from '../../services/batch-ticket-render.js?v=20261125-1';
+import { EARLY_PRINT_NOTE, invEarlyMarksRows, withInvMark, printRebase } from '../../services/inventory-marks.js?v=20261124-4';
 import { escapeHtml } from '../../utils/security-utils.js';
+import { loadSettingRows } from '../../services/schedule-service.js';
+import { loadBatchRules, rulesSizing } from '../../services/batch-rules.js?v=20261125-1';
+import { LAYOUT_DAYS_PREFIX, resolveLayoutDays, layoutDaysSplit, castDayDates, inventoryRowsOfDay, batchDaysStamp } from '../../utils/layout-days.js';
 import { logger } from '../../utils/logger.js';
 
 const $ = (id) => document.getElementById(id);
@@ -56,31 +59,61 @@ async function fromScheduler() {
     const ids = [...new Set((data || []).map(r => r.casting_id))];
     const casts = ids.length ? (await client.from('project_castings').select('id, project_number, casting_number').in('id', ids)).data || [] : [];
     const byId = new Map(casts.map(c => [c.id, c]));
+    // Cast days (2026-11-20): all Cast rows of those castings, in any week, number their cast days (by date here:
+    // the scheduler row does not carry the staging day; the weekly's own hand-off does).
+    const daysOf = await schedulerCastDays(ids);
     const out = [];
     for (const r of data || []) {
         const c = byId.get(r.casting_id);
         if (!c) continue;
         if (out.some(o => o.projectNumber === String(c.project_number) && o.castingNumber === String(c.casting_number))) continue;
-        out.push({ projectNumber: String(c.project_number).trim(), castingNumber: String(c.casting_number).trim(), date: isoToMdy(String(r.date).slice(0, 10)) });
+        const item = { projectNumber: String(c.project_number).trim(), castingNumber: String(c.casting_number).trim(), date: isoToMdy(String(r.date).slice(0, 10)) };
+        const days = daysInWeek(daysOf.get(r.casting_id));
+        if (days) item.days = days;
+        out.push(item);
     }
     return out;
+}
+/** Every Cast day of the given castings on the Plant Scheduler: Map casting id -> dates, Day 1 first. */
+async function schedulerCastDays(castingIds) {
+    const out = new Map();
+    if (!castingIds.length) return out;
+    if (!getSupabaseClient()) await initializeSupabase();
+    const all = (await getSupabaseClient().from('plant_schedule').select('casting_id, date').eq('department', 'Cast').in('casting_id', castingIds)).data || [];
+    const cards = new Map();
+    for (const r of all) { if (!cards.has(r.casting_id)) cards.set(r.casting_id, []); cards.get(r.casting_id).push({ iso: String(r.date).slice(0, 10) }); }
+    for (const [id, list] of cards) out.set(id, castDayDates(list));
+    return out;
+}
+/** The cast days of a casting that fall in this week: [{ n, of, date }] (null = it casts on one day only). */
+function daysInWeek(all) {
+    if (!all || all.length < 2) return null;
+    const days = all.map((iso, i) => ({ n: i + 1, of: all.length, iso })).filter(x => x.iso >= WEEK && x.iso <= addDays(WEEK, 6)).map(x => ({ n: x.n, of: x.of, date: isoToMdy(x.iso) }));
+    return days.length ? days : null;
 }
 
 // ---- one project's data -------------------------------------------------------------------------------------------
 async function loadProjectData(pn) {
     const [project, castings, logs] = await Promise.all([loadProject(pn), loadCastings(pn), loadColorLogsForProject(pn)]);
     const ids = (castings || []).map(c => c.id);
-    const [tickets, comps, inv] = await Promise.all([
+    // rules (2026-11-25): the job's own batching rules (portal: Batch Tickets, Job Batching). They MUST be read: a job
+    // with special batching printed the typical way would be wrong tickets, so a failed read fails the whole job.
+    const [tickets, comps, inv, dayRows, rules] = await Promise.all([
         loadBatchTicketsForCastings(ids),
         loadAllComponentsForProject(ids).catch(() => new Map()),
-        loadAllInventoryForProject(ids).catch(() => new Map())
+        loadAllInventoryForProject(ids).catch(() => new Map()),
+        loadSettingRows(ids.map(id => LAYOUT_DAYS_PREFIX + id)).catch(() => new Map()),
+        getSpecialBatching(pn) ? null : loadBatchRules(pn, { strict: true })
     ]);
+    // castings split over their cast days (portal: Casting Inventory, Day columns), read against the inventory as it is now
+    const days = new Map();
+    for (const [k, v] of dayRows || []) { const id = k.slice(LAYOUT_DAYS_PREFIX.length); days.set(id, resolveLayoutDays(v, (inv && inv.get(id)) || [])); }
     const slump = {
         face: clampSlumpTarget(project?.target_slump_face, SLUMP_TARGET_DEFAULTS.face),
         firstBackUp: clampSlumpTarget(project?.target_slump_first_backup, SLUMP_TARGET_DEFAULTS.firstBackUp),
         finalBackUp: clampSlumpTarget(project?.target_slump_final_backup, SLUMP_TARGET_DEFAULTS.finalBackUp)
     };
-    return { pn, project, castings: castings || [], logs: logs || [], tickets: tickets || new Map(), comps: comps || new Map(), inv: inv || new Map(), slump, special: getSpecialBatching(pn) };
+    return { pn, project, castings: castings || [], logs: logs || [], tickets: tickets || new Map(), comps: comps || new Map(), inv: inv || new Map(), days, slump, special: getSpecialBatching(pn), rules: rules || null };
 }
 
 /** The special job's own batching page, loaded hidden; resolves with its window once jsbWeekTickets exists. */
@@ -119,7 +152,28 @@ async function build() {
     status.textContent = `Loading ${pns.length} job${pns.length === 1 ? '' : 's'}…`;
     const datas = await Promise.all(pns.map(pn => loadProjectData(pn).catch(err => { logger.error('[week-batch] load failed', pn, err); return { pn, error: err }; })));
     for (const d of datas) S.projects.set(d.pn, d);
+    {
+        const lines = [];
+        for (const it of items) {
+            const d = S.projects.get(it.projectNumber);
+            const casting = d && !d.error ? d.castings.find(c => String(c.casting_number).trim() === String(it.castingNumber).trim()) : null;
+            const cfg = casting && !d.special ? d.days.get(casting.id) : null;     // (a special job's own page batches the whole casting: one line)
+            let days = Array.isArray(it.days) && it.days.length ? it.days : null;
+            // a list made by a weekly tab that was open before this version carries no days: ask the scheduler
+            if (!days && cfg && Object.keys(cfg.assign || {}).length) {
+                try { days = daysInWeek((await schedulerCastDays([casting.id])).get(casting.id)); } catch (e) { logger.warn('[week-batch] cast days of', it.projectNumber, it.castingNumber, 'not read', e); }
+            }
+            const split = !!(cfg && days && layoutDaysSplit(cfg, days[0].of));
+            if (split) for (const day of days) lines.push({ ...it, date: day.date, split: true, dayN: day.n, dayOf: day.of, cfg });
+            else lines.push({ ...it, split: false });
+        }
+        const order = (a, b) => (mdyToIso(a.date) || '').localeCompare(mdyToIso(b.date) || '') || a.projectNumber.localeCompare(b.projectNumber) || String(a.castingNumber).localeCompare(String(b.castingNumber), undefined, { numeric: true });
+        if (lines.some(l => l.split)) lines.sort(order);
+        items = lines;
+        S.items = items;
+    }
     const ms = await loadMilestonesForProjects(pns).catch(() => ({ byCasting: new Map(), touched: new Set() }));
+    S.ms = ms;
 
     S.printedOn = new Date();
     const results = [];
@@ -142,13 +196,26 @@ async function build() {
                 r.stale = res?.stale || { verdict: 'none', diffs: [] };
             } catch (err) { logger.error('[week-batch] special page failed', err); r.reason = 'the ' + d.special.label + ' page could not build the tickets'; }
         } else {
+            // A casting split over its cast days: this line is ONE day, with that day's tickets and that day's pieces.
+            // Not split: the Day 1 tickets, as always.
+            const dayOfTicket = (tk) => (parseInt(tk && tk.castDay, 10) > 1 ? parseInt(tk.castDay, 10) : 1);
+            const dayTickets = (d.tickets.get(casting.id) || []).filter(tk => dayOfTicket(tk) === (it.split ? it.dayN : 1));
+            const dayInvRows = it.split ? inventoryRowsOfDay(r.invRows, it.cfg, it.dayOf, it.dayN) : r.invRows;
+            if (it.split) { r.dayLabel = `Day ${it.dayN} of ${it.dayOf}`; r.split = { n: it.dayN, of: it.dayOf, cfg: it.cfg }; }
+            // A ticket in a colour no piece has any more is left over: not printed, so it cannot stamp the board (2026-11-24).
+            const colourName = (tk) => d.logs.find(l => l && l.id === tk.colorLogId)?.name || 'another color';
+            const leftOver = dayTickets.filter(tk => leftOverTicket(tk, dayInvRows));
+            const liveTickets = leftOver.length ? dayTickets.filter(tk => !leftOver.includes(tk)) : dayTickets;
+            if (leftOver.length) r.leftOver = leftOver.map(colourName).join(', ');
             const out = buildTicketPages({
-                casting, projectName: r.projectName, tickets: d.tickets.get(casting.id) || [], logs: d.logs, components: d.comps.get(casting.id) || [],
-                slumpTargets: d.slump, printedOn: S.printedOn, castDate: it.date
+                casting, projectName: r.projectName, tickets: liveTickets, logs: d.logs, components: d.comps.get(casting.id) || [],
+                slumpTargets: d.slump, printedOn: S.printedOn, castDate: it.date, rules: d.rules, sizing: rulesSizing(d.rules),
+                castLabel: it.split ? `${casting.casting_number || ''} \u2014 DAY ${it.dayN} OF ${it.dayOf}` : null
             });
             r.pages = out.pages; r.rows = batchTotalsRows(out.entries); r.batches = out.batches; r.reason = out.reason;
+            if (!out.pages && r.leftOver) r.reason = `the only batched ticket (${r.leftOver}) is in a color no piece of this casting has any more`;
             const comps = d.comps.get(casting.id) || [];
-            r.stale = staleVerdict({ tickets: d.tickets.get(casting.id) || [], rows: r.invRows, logFor: (tk) => activeColorLogFor({ ticket: tk, components: comps, logs: d.logs }) });
+            r.stale = staleVerdict({ tickets: liveTickets, rows: dayInvRows, sizing: rulesSizing(d.rules), logFor: (tk) => activeColorLogFor({ ticket: tk, components: comps, logs: d.logs }) });
         }
     }
     S.results = results;
@@ -163,9 +230,10 @@ function coverHtml(results) {
         const flags = [];
         if (r.stale?.verdict === 'changed') flags.push('<span class="wb-bad">BATCHING OUT OF DATE' + (r.stale.diffs.length ? ' — ' + escapeHtml(r.stale.diffs.join(' · ')) : '') + '</span>');
         if (r.onBoard && !r.ciFinal) flags.push('<span class="wb-warn">inventory not final</span>');
+        if (r.leftOver) flags.push('<span class="wb-warn">not printed: left-over ticket in ' + escapeHtml(r.leftOver) + ' (no piece is that color any more)</span>');
         return flags.length ? flags.join('<br>') : 'tickets';
     };
-    const rows = results.map(r => `<tr class="${r.pages ? '' : 'wb-miss'}"><td>${escapeHtml(r.date || '')}</td><td>${escapeHtml(r.projectNumber)} · ${escapeHtml(r.projectName)}</td><td>Cast ${escapeHtml(r.castingNumber)}</td><td class="wb-num">${r.batches || ''}</td><td>${statusOf(r)}</td></tr>`).join('');
+    const rows = results.map(r => `<tr class="${r.pages ? '' : 'wb-miss'}"><td>${escapeHtml(r.date || '')}</td><td>${escapeHtml(r.projectNumber)} · ${escapeHtml(r.projectName)}</td><td>Cast ${escapeHtml(r.castingNumber)}${r.dayLabel ? ' \u00b7 ' + escapeHtml(r.dayLabel) : ''}</td><td class="wb-num">${r.batches || ''}</td><td>${statusOf(r)}</td></tr>`).join('');
     const totalBatches = printable.reduce((n, r) => n + r.batches, 0);
     return `<div class="bt-page wb-cover">
         <h1>Batch tickets — week of ${escapeHtml(weekLabel())}</h1>
@@ -183,7 +251,7 @@ function totalsHtml(results) {
     for (const day of days) {
         const list = printable.filter(r => mdyToIso(r.date) === day);
         const dayRows = sumTotalsRows(list.map(r => r.rows));
-        const who = list.map(r => r.projectNumber + ' cast ' + r.castingNumber).join(', ');
+        const who = list.map(r => r.projectNumber + ' cast ' + r.castingNumber + (r.dayLabel ? ' (' + r.dayLabel.toLowerCase() + ')' : '')).join(', ');
         const table = renderTotalsTable(dayRows, `Mix Day Totals — ${longDay(day)} · ${who} — all materials`);
         if (table) html += `<div class="bt-page wb-totals">${keyMaterialsHtml(dayRows, `Key materials — ${longDay(day)} · ${who}`)}${table}</div>`;
     }
@@ -244,7 +312,24 @@ async function stampPrinted() {
     S.stamped = true;
     const now = new Date().toISOString();
     let n = 0;
+    const stamped = new Set();
     for (const r of (S.results || []).filter(r => r.pages && r.casting && r.onBoard)) {
+        if (stamped.has(r.casting.id)) continue;      // a casting split over its cast days is on the list once per day
+        stamped.add(r.casting.id);
+        // Split over its cast days: green only when every day that casts pieces has been printed (here or before);
+        // until then orange, and the note on the board says which day is printed and which is not.
+        if (r.split) {
+            const printed = (S.results || []).filter(x => x.pages && x.casting && x.casting.id === r.casting.id && x.split).map(x => x.split.n);
+            const needed = Array.from({ length: r.split.of }, (_, i) => i + 1).filter(n => inventoryRowsOfDay(r.invRows, r.split.cfg, r.split.of, n).length > 0);
+            const tks = S.projects.get(r.projectNumber)?.tickets?.get(r.casting.id) || [];
+            const unbatched = needed.filter(n => !tks.some(tk => (parseInt(tk.castDay, 10) > 1 ? parseInt(tk.castDay, 10) : 1) === n && parseFloat(tk.cuFt) > 0 && !leftOverTicket(tk, inventoryRowsOfDay(r.invRows, r.split.cfg, r.split.of, n))));
+            const partial = batchDaysStamp(needed, printed, S.ms?.byCasting.get(r.casting.id)?.get('Batching Sheets') || null, unbatched);
+            if (partial) {
+                try { await saveMilestone({ projectNumber: r.projectNumber, castingId: r.casting.id, milestone: 'Batching Sheets', status: MS.ORANGE, locked: false, note: partial, stampedAt: now }); n++; }
+                catch (err) { logger.error('[week-batch] stamp failed', r.projectNumber, r.castingNumber, err); }
+                continue;
+            }
+        }
         try {
             await saveMilestone({
                 projectNumber: r.projectNumber, castingId: r.casting.id, milestone: 'Batching Sheets',
@@ -253,6 +338,11 @@ async function stampPrinted() {
                 stampedAt: now
             });
             n++;
+            // Printed from a final inventory: these tickets are what the lock compares with from here on (2026-11-24;
+            // the same as the portal's own print). Only written when the tickets were out of date before this print.
+            const ci = r.ciFinal ? S.ms?.byCasting.get(r.casting.id)?.get('Casting Inventory') : null;
+            const ciNote = ci ? printRebase(ci.note, r.invRows, 'Batching Sheets') : null;
+            if (ciNote) await saveMilestone({ projectNumber: r.projectNumber, castingId: r.casting.id, milestone: 'Casting Inventory', status: ci.status, locked: !!ci.locked, note: ciNote, stampedAt: ci.stamped_at ?? null });
         } catch (err) { logger.error('[week-batch] stamp failed', r.projectNumber, r.castingNumber, err); }
     }
     $('wb-status').textContent = n ? `Printed — "Batching Sheets" stamped on the board for ${n} casting${n === 1 ? '' : 's'}.` : 'Printed.';

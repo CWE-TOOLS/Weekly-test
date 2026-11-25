@@ -104,14 +104,14 @@ import {
     saveBatchTicketForCasting,
     deleteBatchTicket,
     emptyForm as emptyBatchTicketForm
-} from '../../services/batch-ticket-service.js';
+} from '../../services/batch-ticket-service.js?v=20261120-1';
 import {
     buildBatchPlan,
     getColorLogSandLbs,
     roundSig,
     FROM_LBS
 } from '../../utils/batch-calc.js';
-import { getSpecialBatching } from '../../config/special-batching.js?v=20261119-1';
+import { getSpecialBatching } from '../../config/special-batching.js?v=20261124-4';
 import { fetchAllTasks } from '../../services/data-service.js';
 import { loadActualHoursForProject } from '../../services/actual-hours-service.js';
 import { parseDate } from '../../utils/date-utils.js';
@@ -129,15 +129,17 @@ import {
     setClassroomTasksOrder
 } from '../../services/classroom-tasks-service.js';
 import { renderCastingLayout, computeLayoutRects, parseDimension, tableBlockRects, CASTING_AREAS } from './casting-layout.js?v=20261112-1';
-import { attachLayoutDrag } from './casting-layout-drag.js?v=20261112-1';
-import { activateJigListTab } from './jig-list.js?v=20261112-1';
+import { attachLayoutDrag } from './casting-layout-drag.js?v=20261120-1';
+import { LAYOUT_DAYS_PREFIX, normLayoutDays, resolveLayoutDays, layoutDayRows, layoutDaysEmpty, layoutDaysCanon, castDayDates, layoutDayOf, layoutDaysSplit, layoutDaySide, placeKeys, inventoryPieceRows, inventoryRowsOfDay, batchDaysStamp, batchDaysPrinted } from '../../utils/layout-days.js?v=20261120-7';
+import { activateJigListTab } from './jig-list.js?v=20261124-2';
 import { CI_DEPENDENT, MS, CI_STATE, milestonesApply, AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, APPROVALS_TAB_ITEMS } from '../../config/milestones-config.js?v=20261119-1';
-import { SLUMP_TARGET_DEFAULTS, FINAL_BACKUP_PIG_REDUCTION_PCT, parsePigReduction, BT_IMPORT_META, btOverrides, btImportStamp, btStampDate, additiveAmount, batchTotalsRows, renderBatchTotals, clampSlumpTarget, formatSlumpLabel, renderSlumpGraphic, renderBatchTicketCard, BATCH_PRINT_CSS } from '../../services/batch-ticket-render.js';
-import { finishingProductsHtml, faceSqFtOfInventory, groutNotesHtml } from '../../services/finishing-products.js?v=20261119-1';   // moved out 2026-10-30 so the weekly's week print shares the ticket code
-import { invHash as invHashShared, invFingerprintRows, invColourFingerprintRows } from '../../services/inventory-marks.js';
+import { SLUMP_TARGET_DEFAULTS, FINAL_BACKUP_PIG_REDUCTION_PCT, parsePigReduction, BT_IMPORT_META, btOverrides, btImportStamp, btStampDate, additiveAmount, batchTotalsRows, renderBatchTotals, clampSlumpTarget, formatSlumpLabel, renderSlumpGraphic, renderBatchTicketCard, BATCH_PRINT_CSS, leftOverTicket } from '../../services/batch-ticket-render.js?v=20261125-1';
+import { finishingProductsHtml, faceSqFtOfInventory, loadFinishingDefs, initFinishingEditor } from '../../services/finishing-products.js?v=20261124-2';   // moved out 2026-10-30 so the weekly's week print shares the ticket code
+import { loadBatchRules, saveBatchRules, rulesSizing, rulesPigReduction, drawBatchRulesPanel, setBatchRulesStatus, updateBatchRulesFloat } from '../../services/batch-rules.js?v=20261125-1';   // job batching rules (2026-11-25)
+import { invHash as invHashShared, invFingerprintRows, invColourFingerprintRows, invTypeColourFingerprintRows, printRebase } from '../../services/inventory-marks.js?v=20261124-4';
 import { loadMilestonesForProject, saveMilestone, isMilestonesMigrationPending, loadLayoutConditions, loadLayoutConditionsForCastings, LAYOUT_CONDITION_PREFIX, layoutConditionNote, parseLayoutCondition, sideWords } from '../../services/milestones-service.js';
-import { loadJigListsForProject as loadJigListsForScrim, scrimForInventory } from '../../services/jig-list-service.js?v=20261112-1';
-import { loadReadyFlags, setReadyFlag, loadSettingRows, setSettingRow, loadScheduleForCastings, OPT_SCHEDULER_PREFIX } from '../../services/schedule-service.js?v=20261106-1';
+import { loadJigListsForProject as loadJigListsForScrim, scrimForInventory, scrimForCastings } from '../../services/jig-list-service.js?v=20261124-2';
+import { loadReadyFlags, setReadyFlag, loadSettingRows, setSettingRow, loadScheduleForCastings, OPT_SCHEDULER_PREFIX } from '../../services/schedule-service.js?v=20261120-1';
 import { tasksForDepartment, teamOfDepartment, taskForPhase, STAGING_NAME_OF_TEAM, REVENUE_PER_HOUR } from '../../config/scheduler-config.js?v=20261027-1';
 import {
     loadLayoutPositions,
@@ -147,7 +149,7 @@ import {
 } from '../../services/casting-layout-service.js';
 import { registerRefreshHandler, isPortalChange, isOwnSignal, signalInfo } from '../../services/supabase-service.js';
 // Type master list (2026-11-11): the job's types + totals above the castings; casting rows pick their type from it.
-import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, TM_NEW } from './type-master.js?v=20261119-4';
+import { initTypeMaster, loadTypeMaster, renderTypeMaster, refreshTypeMasterStatus, typeMasterActive, typeCellHtml, typeMasterOverCheck, typeMasterPasteCheck, typeMasterMissing, typeMasterEntries, typeMasterFillButtonHtml, typeMasterFill, TM_NEW } from './type-master.js?v=20261123-1';
 import { initInventorySearch, renderInventorySearch } from './inventory-search.js?v=20261116-1';
 import '../../utils/number-wheel-guard.js';   // the mouse wheel must not change a focused hour box (user 2026-11-03)
 
@@ -585,6 +587,7 @@ async function showListView() {
     document.getElementById('pp-list-view').hidden = false;
     document.getElementById('pp-form-view').hidden = true;
     updateFloats();   // hides the batching floats (castings box, out-of-date warning) and the Releasability bar
+    renderClayFloat();   // and the Casting Layout's cast-day box: it floats over the page, so it must go with the project
     const memosView = document.getElementById('pp-memos-view');
     if (memosView) memosView.hidden = true;
     const scViewLV = document.getElementById('pp-standards-view');
@@ -600,6 +603,7 @@ async function showListView() {
     batchTicketsLoadedFor = null;
     batchTickets.clear();
     currentBatchCastingId = null;
+    btTotalsScope = 'day';
     currentBatchColorSel.clear();
     jobMemosLoadedFor = null;
     currentJobMemos = [];
@@ -630,6 +634,7 @@ async function showFormView(projectNumber, draftOverrides = null) {
     batchTicketsLoadedFor = null;
     batchTickets.clear();
     currentBatchCastingId = null;
+    btTotalsScope = 'day';
     currentBatchColorSel.clear();
     for (const p of batchTicketSaveTimers.values()) clearTimeout(p.timer);
     batchTicketSaveTimers.clear();
@@ -1272,17 +1277,13 @@ async function loadAndRenderCastings() {
         loadAllComponentsForCurrentProject(),
         loadTypeMaster(currentProjectNumber)
     ]);
-    // First time visiting this project's Castings tab in this session: seed
-    // every casting as expanded EXCEPT those with more than the threshold of
-    // inventory rows — those would push the rest off-screen, so default them
-    // collapsed. Subsequent re-renders within the same project preserve the
-    // user's collapse choices (clicking the chevron is sticky for the session).
+    // First time visiting this project's Castings tab in this session: EVERY casting starts collapsed
+    // (user, 2026-11-20: "always open up with the casts collapsed"; before, castings with few rows started
+    // open). Subsequent re-renders within the same project preserve the user's choices (the chevron and
+    // Expand all / Collapse all are sticky for the session); a casting opened on purpose (a link from the
+    // board, a search hit, a new or pasted casting) still opens.
     if (castInvExpandedProject !== currentProjectNumber) {
-        currentCastInvExpanded = new Set(
-            currentCastings
-                .filter(c => getInventoryFor(c.id).length <= CAST_INV_AUTO_EXPAND_LIMIT)
-                .map(c => c.id)
-        );
+        currentCastInvExpanded = new Set();
         castInvExpandedProject = currentProjectNumber;
         // Summary readouts start collapsed on every project.
         castSumExpanded = new Set();
@@ -1291,8 +1292,27 @@ async function loadAndRenderCastings() {
     renderCastings();
     // Cast day of each casting, from the weekly (2026-11-16): asked on every load of the tab, never awaited.
     const castDayFor = currentProjectNumber;
-    loadWeeklyCastDates(castDayFor).then(() => { if (currentProjectNumber === castDayFor) refreshCastDayOnCards(); })
-        .catch(err => logger.warn('[project-portal] cast day from the weekly failed:', err));
+    loadWeeklyCastDates(castDayFor).then(async () => {
+        if (currentProjectNumber !== castDayFor) return;
+        refreshCastDayOnCards();
+        // castings with 2+ cast days get their Day columns (2026-11-20); never redrawn under someone who is typing
+        const changed = await loadCastDaysCfgs();
+        if (currentProjectNumber !== castDayFor) return;
+        const undrawn = currentCastings.some(c => castDatesOf(c).length > 1 && currentCastInvExpanded.has(c.id)
+            && !document.querySelector(`.pp-cast-card[data-casting-id="${c.id}"] [data-inv-days]`));
+        if (!changed && !undrawn) return;
+        // Same rule as the live refresh: never under someone who is typing, has unaccepted edits, a dialog open or a
+        // row in hand; it simply waits (no forced redraw). The user's own waiting saves land first.
+        const draw = async () => {
+            if (currentProjectNumber !== castDayFor || currentTab !== 'castings') return;
+            if (liveUserBusy() || document.body.classList.contains('pp-inv-dragging')) { setTimeout(draw, 2000); return; }
+            try { await flushPendingSaves(); } catch (e) { /* the redraw shows what is in memory either way */ }
+            if (currentProjectNumber !== castDayFor || currentTab !== 'castings') return;
+            if (liveUserBusy() || document.body.classList.contains('pp-inv-dragging')) { setTimeout(draw, 2000); return; }
+            renderCastings();
+        };
+        draw();
+    }).catch(err => logger.warn('[project-portal] cast day from the weekly failed:', err));
 }
 
 // Castings with more than this many inventory rows default to collapsed when
@@ -1307,6 +1327,7 @@ async function loadAllInventoryForCurrentProject() {
     try {
         currentCastingInventory = await loadAllInventoryForProject(ids);
         currentCastingInventoryLoadedFor = currentProjectNumber;
+        invColourSnap();
     } catch (err) {
         logger.error('[project-portal] loadAllInventoryForProject failed:', err);
         currentCastingInventory = new Map();
@@ -1480,7 +1501,7 @@ function renderCastings() {
     list.querySelectorAll('.pp-cast-card').forEach(card => {
         if (!ciLockedById(card.dataset.castingId)) return;
         card.classList.add('pp-cast-card-locked');
-        card.querySelectorAll('.pp-inv-row input, .pp-inv-row select, .pp-inv-add, .pp-inv-import-remakes, [data-action="paste-components"], [data-action="cut-selected"], .pp-inv-row-cut, .pp-inv-row-delete, .pp-inv-row-select, .pp-inv-select-all')
+        card.querySelectorAll('.pp-inv-row input:not(.pp-inv-day-input), .pp-inv-row select, .pp-inv-add, .pp-inv-import-remakes, .pp-inv-fill-master, [data-action="paste-components"], [data-action="cut-selected"], .pp-inv-row-cut, .pp-inv-row-delete, .pp-inv-row-select, .pp-inv-select-all')
             .forEach(el => { el.disabled = true; });
     });
 
@@ -1526,6 +1547,7 @@ function renderCastingCard(c) {
               <!-- second line (2026-11-18): the title block was too crowded on one line -->
               <div class="pp-cast-card-line2">
                 ${castDayPillHtml(c)}
+                ${castDaysPillHtml(c, items)}
                 <span class="pp-cast-card-count">${countLabel}</span>
                 ${castingProjPillHtml(items)}
                 <div class="pp-cast-card-actions">
@@ -1554,18 +1576,25 @@ function ciCardRowHtml(c) {
 }
 
 function renderInventoryBody(casting, items) {
+    const dayInfo = invDayInfo(casting, items);      // a casting the weekly casts on 2+ days: a Day column per day
+    const gridStyle = invGridStyle(dayInfo ? dayInfo.nDays : 0);
     const cardsHtml = items.length === 0
         ? `<div class="pp-opt-cards-empty">No components yet. Add one below.</div>`
-        : items.map(item => renderInventoryRow(item, casting.id)).join('');
+        : items.map(item => renderInventoryRow(item, casting.id, dayInfo)).join('');
+    const dayHeads = dayInfo ? dayInfo.dates.map((d, i) => `<span class="pp-inv-header-qty pp-inv-h-day" title="${escapeAttr(i === 0
+        ? `Pieces that cast on Day 1 (${castDayLong(d)}): worked out, whatever is not on a later day`
+        : `Type how many pieces of the row (qty + extras) cast on Day ${i + 1} (${castDayLong(d)})`)}">Day ${i + 1}</span>`).join('') : '';
 
     const headerRow = `
+        ${dayInfo ? invDaysBarHtml(casting, dayInfo) : ''}
         <div class="pp-inv-legend"><span class="pp-inv-legend-pm" title="Qty, Extras, Type, Description, Width, Length, Color, Remake Of — the PM enters these, then presses Ready for engineering. Proj Sq Ft is worked out from them by itself.">PM fields</span><span class="pp-inv-legend-eng" title="Cu Ft, FF Sq Ft — engineering enters these, then presses Casting Inventory ready">Engineering fields</span></div>
         <div class="pp-inv-header-row">
             <input type="checkbox" class="pp-inv-row-select pp-inv-select-all" data-select-all aria-label="Select every component on this casting" title="Select all / none" ${items.length && items.every(it => invSelected.has(it.id)) ? 'checked' : ''} ${items.length ? '' : 'disabled'}>
             <div class="pp-inv-header-grip-spacer"></div>
-            <div class="pp-inv-header-fields">
+            <div class="pp-inv-header-fields"${gridStyle}>
                 <span class="pp-inv-header-qty pp-inv-h-pm">Qty</span>
                 <span class="pp-inv-header-qty pp-inv-h-pm">Extras</span>
+                ${dayHeads}
                 <span class="pp-inv-h-pm">Type</span>
                 <span class="pp-inv-h-pm" title="A short description of the part, for example: flat. Tick several rows (Shift+click for a range), then type it on any ticked row: it goes on all of them. It prints on the tracking sheet.">Description</span>
                 <span class="pp-inv-h-pm">Width</span>
@@ -1598,6 +1627,7 @@ function renderInventoryBody(casting, items) {
             </div>
             <button type="button" class="pp-add-btn pp-inv-add" data-action="add-inventory" data-casting-id="${escapeAttr(casting.id)}">+ Add Component</button>
             <button type="button" class="pp-add-btn pp-inv-import-remakes" data-action="open-import-remakes" data-casting-id="${escapeAttr(casting.id)}" ${candidateCount === 0 ? 'disabled' : ''} title="${escapeAttr(importTitle)}">${escapeHtml(importLabel)}</button>
+            ${typeMasterFillButtonHtml(casting.id)}
         </div>
     `;
 }
@@ -1647,7 +1677,7 @@ function countImportableRemakes(castingId) {
 
 /** The rejected panels a remake inventory row re-casts (kept on the row as a comma list, one id per piece). */
 function invRemakeIds(item) { return String(item?.remake_of_panel_id || '').split(',').map(x => x.trim()).filter(Boolean); }
-function renderInventoryRow(item, castingId) {
+function renderInventoryRow(item, castingId, dayInfo = null) {
     const remakeIds = item.remake_of_casting_id ? invRemakeIds(item) : [];
     let remakeCellHtml;
     if (!remakeIds.length) {
@@ -1666,9 +1696,10 @@ function renderInventoryRow(item, castingId) {
                     <circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/>
                 </svg>
             </div>
-            <div class="pp-inv-row-fields">
+            <div class="pp-inv-row-fields"${invGridStyle(dayInfo ? dayInfo.nDays : 0)}>
                 ${invCell(item.id, 'quantity', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'quantity')}" data-field="quantity" min="${typeMasterActive() ? 0 : 1}" step="1" value="${escapeAttr(item.quantity ?? 1)}"${invEditedTitle(item.id, 'quantity')} />`)}
                 ${invCell(item.id, 'extras', `<input type="number" class="pp-inv-input pp-inv-pm pp-inv-input-qty${invEditedCls(item.id, 'extras')}" data-field="extras" min="0" step="1" placeholder="0" value="${escapeAttr(item.extras ?? 0)}"${invEditedTitle(item.id, 'extras')} />`)}
+                ${invDayCellsHtml(item, dayInfo)}
                 ${invCell(item.id, 'type', typeCellHtml(item, `pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}`, invEditedTitle(item.id, 'type'))
                     || `<input type="text" class="pp-inv-input pp-inv-pm${invEditedCls(item.id, 'type')}" data-field="type" placeholder="Type" value="${escapeAttr(item.type || '')}"${invEditedTitle(item.id, 'type')} />`)}
                 ${invCell(item.id, 'description', `<input type="text" class="pp-inv-input pp-inv-pm pp-inv-input-desc${invEditedCls(item.id, 'description')}" data-field="description" placeholder="Description" maxlength="120" value="${escapeAttr(item.description || '')}"${invEditedTitle(item.id, 'description') || (item.description ? ` title="${escapeAttr(item.description)}"` : '')} />`)}
@@ -2407,6 +2438,7 @@ async function handleDeleteCasting(id) {
     if (!confirm(`Delete casting ${c.casting_number}?`)) return;
     try {
         await deleteCasting(id);
+        if (castDaysCfgBy.has(id)) { castDaysCfgBy.delete(id); setSettingRow(LAYOUT_DAYS_PREFIX + id, null).catch(() => { /* an orphan settings row is harmless */ }); }
         currentCastings = currentCastings.filter(x => x.id !== id);
         currentCastInvExpanded.delete(id);
         currentCastingInventory.delete(id);
@@ -2633,6 +2665,8 @@ function updateCastingInventoryCount(castingId) {
     const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
     if (!card) return;
     refreshCastingProjected(card, castingId);
+    refreshInvDays(castingId);
+    healCastDays(castingId);
     const countEl = card.querySelector('.pp-cast-card-count');
     if (!countEl) return;
     countEl.innerHTML = castingCountLabelHtml(getInventoryFor(castingId));
@@ -3181,7 +3215,7 @@ function renderApprovals() {
         const nGreen = scoped.filter(c => msStatus(c.id, m) === MS.GREEN).length;
         const allGreen = nGreen === scoped.length;
         return `<th><span class="pp-appr-col-name">${escapeHtml(m)}</span><span class="pp-appr-col-tag ${auto ? 'pp-appr-tag-auto' : 'pp-appr-tag-pman'}">${auto ? 'AUTO' : 'P. MANUAL'}</span>
-            <span class="pp-appr-col-count${allGreen ? ' pp-appr-col-count-done' : ''}" title="Castings signed off for ${escapeAttr(m)}">${nGreen} of ${scoped.length} done</span>
+            <span class="pp-appr-col-count${allGreen ? ' pp-appr-col-count-done' : nGreen === 0 ? ' pp-appr-col-count-none' : ''}" title="Castings signed off for ${escapeAttr(m)}: red = none yet, orange = some, green = all">${nGreen} of ${scoped.length} done</span>
             ${auto ? '' : `<button type="button" class="pp-appr-all" data-action="appr-all" data-milestone="${escapeAttr(m)}" data-to="${allGreen ? 'red' : 'green'}" title="${allGreen ? 'Clear every casting' : 'Mark every casting done'}">${allGreen ? 'clear all' : 'all done'}</button>`}</th>`;
     }).join('');
     const rows = scoped.map(c => `<tr><th class="pp-appr-cast">Cast ${escapeHtml(c.casting_number || '')}${c.description ? `<span class="pp-appr-desc">${escapeHtml(c.description)}</span>` : ''}</th>
@@ -3248,6 +3282,7 @@ async function loadStagingDescriptions() {
         logger.error('[project-portal] fetchAllTasks (staging) failed:', err);
     }
     currentStagingDates = computeStagingDayDates(scheduled);
+    await ensureCastDays();      // split castings name each Cast / Demold day's pieces (2026-11-20)
 
     // Per-casting day index, computed locally so Staging doesn't depend on the shared task
     // cache already carrying castingDayNumber (it won't until the cache refreshes after a
@@ -3343,7 +3378,32 @@ function computeStagingDayDates(tasks) {
     for (const arr of out.values()) arr.sort();
     return out;
 }
+/** Cast / Demold days of a casting split over its cast days: what casts (or is demolded) on that staging day. */
+function stgDayPiecesHtml(castNum, department, day) {
+    if (department !== 'Cast' && department !== 'Demold') return '';
+    const casting = currentCastings.find(c => String(c.casting_number || '').trim() === String(castNum || '').trim());
+    const info = casting ? invDayInfo(casting, getInventoryFor(casting.id)) : null;
+    const from = Number(day);
+    if (!info || !info.split || !(from >= 1 && from <= info.nDays)) return '';
+    let to = from;
+    if (department === 'Demold') {       // Demold day n = Cast day n; a last Demold day with cast days left carries them all
+        let nDemold = 0;
+        for (const k of currentStagingDates.keys()) if (k.startsWith(`${castNum}|Demold|`)) nDemold++;
+        if (!nDemold) return '';
+        if (from === nDemold && nDemold < info.nDays) to = info.nDays;
+        if (from === 1 && to === info.nDays) return '';
+    }
+    const types = new Map();
+    let pcs = 0;
+    for (let d = from; d <= to; d++) { const t = info.totals[d - 1]; pcs += t.pcs; for (const [name, q] of t.types) types.set(name, (types.get(name) || 0) + q); }
+    const list = [...types].map(([name, q]) => `${name} \u00d7${q}`).join(', ');
+    const what = department === 'Cast' ? 'cast on this day' : `demolded on this day (cast day${to > from ? `s ${from}-${to}` : ` ${from}`})`;
+    return `<span class="pp-stg-day-pcs${pcs ? '' : ' pp-stg-day-pcs-none'}" title="${escapeAttr(`This casting is split over ${info.nDays} cast days. Pieces ${what}: ${list || 'none'}. Change it on the Casting Inventory (Day columns) or the Casting Layout tab.`)}">${pcs} pcs</span>`;
+}
 function stgDayDateHtml(castNum, department, day) {
+    return stgDayDateOnlyHtml(castNum, department, day) + stgDayPiecesHtml(castNum, department, day);
+}
+function stgDayDateOnlyHtml(castNum, department, day) {
     if (!currentStagingDatesOk) return '';
     const dates = currentStagingDates.get(`${castNum}|${department}|${day}`);
     if (!dates || !dates.length) return `<span class="pp-stg-day-date pp-stg-day-date-none" title="This day is not on the schedule yet">no date</span>`;
@@ -5084,8 +5144,25 @@ function stampPrinted(castingIds, milestone) {
     for (const id of (castingIds || []).filter(Boolean)) {
         const final = !CI_DEPENDENT.includes(milestone) || ciFinal(id);
         // A print made through the hold remembers the inventory it saw (2026-10-27): "Casting Inventory ready" settles it.
-        msSet(id, milestone, final ? MS.GREEN : MS.ORANGE, { note: final ? null : withInvMark(EARLY_PRINT_NOTE, invEarlyMarks(id, milestone)), stamp: true });
+        // The color log print remembers the colours it was printed for (2026-11-24): a casting switched to another
+        // color log afterwards goes orange again (deriveColorLogMilestones).
+        const colourNote = milestone === 'Color Log' && currentCastingInventoryLoadedFor === currentProjectNumber ? withInvMark('', 'cl=' + invColourSet(id)) : null;
+        msSet(id, milestone, final ? MS.GREEN : MS.ORANGE, { note: final ? colourNote : withInvMark(EARLY_PRINT_NOTE, invEarlyMarks(id, milestone)), stamp: true });
+        if (final && CI_DEPENDENT.includes(milestone)) invRebaseAfterPrint(id, milestone);
     }
+}
+/** Batch tickets printed (2026-11-20). A casting split over its cast days is only green once EVERY day that casts
+ *  pieces has been printed; until then it is orange and the note says which day is printed and which is not
+ *  (the hover text on the Releasability Board). Not split, or every day printed: the usual stamp. */
+function stampBatchPrinted(castingId, last) {
+    const info = btDays(castingId);
+    if (!msOn() || !info || !last || !Array.isArray(last.printed)) return stampPrinted([castingId], 'Batching Sheets');
+    const needed = info.totals.map((t, i) => (t.pcs > 0 ? i + 1 : 0)).filter(Boolean);
+    // The days are picked in a pop-up (2026-11-20): a day left out of this print keeps what it had (printed before
+    // stays printed). A day with no batch ticket at all never counts as printed.
+    const note = batchDaysStamp(needed, last.printed, msRow(castingId, 'Batching Sheets'), needed.filter(n => !(last.batched || []).includes(n)));
+    if (!note) return stampPrinted([castingId], 'Batching Sheets');
+    msSet(castingId, 'Batching Sheets', MS.ORANGE, { note, stamp: true });
 }
 function msFlushPendingStamp() { const p = msPendingStamp; msPendingStamp = null; if (p) stampPrinted(p.ids, p.milestone); }
 /** Work has started on this item (forms laid out, jig list imported…): red becomes orange; green and orange stay. */
@@ -5173,7 +5250,95 @@ function invHash(s) { return invHashShared(s); }
 /** Fingerprint of the inventory as one print sees it: the sorted set of its rows' relevant fields (row order ignored, rows added/removed counted). */
 function invFingerprint(castingId, milestone) { return invFingerprintRows(getInventoryFor(castingId), milestone); }   // shared with the weekly's week print (2026-10-30)
 /** All per-print fingerprints as one marker body: b=…;l=…;t=…;c=…;j=… */
-function invMarks(castingId) { return CI_DEPENDENT.map(m => INV_MARK_KEYS[m] + '=' + invFingerprint(castingId, m)).join(';') + ';bc=' + invColourFingerprint(castingId); }
+// ---- Each print is compared with the inventory it was PRINTED from (2026-11-24) ----
+// user: "it turns orange ... stays orange until [it is] printed"; "I thought that this behavior is already programmed".
+// The marker used to be rewritten whole at every "Casting Inventory ready", so a print that was already out of date
+// (orange) was from then on compared with the NEW inventory, and the next unrelated edit turned it green without a
+// reprint. Now: an out-of-date print keeps its own mark across "ready" (keep: milestone -> is that mark still the
+// printed one?), a reprint from a final inventory moves it (invRebaseAfterPrint), and v=2 says the marker was
+// written under this rule. A mark that is no longer known becomes 'x': it matches nothing, only a reprint clears it.
+function invMarks(castingId, keep = null) {
+    const old = {};
+    for (const part of invMarks0(castingId).split(';')) { const i = part.indexOf('='); if (i > 0) old[part.slice(0, i)] = part.slice(i + 1); }
+    const kept = (m) => !!keep && keep.has(m);
+    const keptVal = (m, k) => (keep.get(m) && old[k]) ? old[k] : 'x';
+    const parts = CI_DEPENDENT.map(m => INV_MARK_KEYS[m] + '=' + (kept(m) ? keptVal(m, INV_MARK_KEYS[m]) : invFingerprint(castingId, m)));
+    parts.push('bc=' + (kept('Batching Sheets') ? keptVal('Batching Sheets', 'bc') : invColourFingerprint(castingId)));
+    const ftKnown = kept('Final Tracking') && keep.get('Final Tracking');
+    if (ftKnown && !old.tc && (old.fc || old.bc)) parts.push('fc=' + (old.fc || old.bc));     // an older lock: the colour set is all it recorded
+    else parts.push('tc=' + (ftKnown && old.tc ? old.tc : invTypeColourFingerprint(castingId)));
+    parts.push('v=2');
+    return parts.join(';');
+}
+/** The prints of a casting that are out of date right now (orange, "changed after this was printed"): milestone ->
+ *  true when the lock still holds the mark they were printed from. */
+function invOutOfDatePrints(castingId, reprint = null) {
+    const keep = new Map();
+    for (const m of CI_DEPENDENT) {
+        const r = msRow(castingId, m);
+        if (!r || r.status !== MS.ORANGE || r.note !== INV_CHANGED_NOTE) continue;
+        if (m === 'Batching Sheets' && reprint === 'same') continue;     // it turns green in a moment: its tickets come out the same
+        keep.set(m, invBaselineIsAsPrinted(castingId, r));
+    }
+    return keep;
+}
+/** Is the lock's mark for this out-of-date print still the inventory it was printed from? Always under v=2. A marker
+ *  from before: only when nothing was marked ready (or unlocked) after the print went orange. */
+function invBaselineIsAsPrinted(castingId, r) {
+    if (invMarkPart(castingId, 'v') === '2') return true;
+    const went = Date.parse(r?.updated_at || ''), since = Date.parse(msRow(castingId, 'Casting Inventory')?.stamped_at || '');
+    return Number.isFinite(went) && Number.isFinite(since) && went >= since;
+}
+/** A print made from a final inventory reflects the inventory as it is now: that is what it is compared with from
+ *  here on. Only writes when its mark really moves (it was out of date and has just been reprinted). */
+function invRebaseAfterPrint(castingId, milestone) {
+    const go = () => {
+        const r = msRow(castingId, 'Casting Inventory');
+        if (!r || currentCastingInventoryLoadedFor !== currentProjectNumber) return;
+        const note = printRebase(r.note, getInventoryFor(castingId), milestone);
+        if (note) msSet(castingId, 'Casting Inventory', r.status, { locked: !!r.locked, note });
+    };
+    if (currentCastingInventoryLoadedFor === currentProjectNumber) go();
+    else loadAllInventoryForCurrentProject().then(go).catch(err => logger.warn('[milestones] print mark not refreshed:', err));
+}
+// ---- Colour changes reach Final Tracking and the Color Log too (2026-11-24) ----
+// user: "link final tracking to color log changes. that tracking shows the color log per type ... and needs to be
+// reprinted if it changes"; "the color log changed for the casting, it turns orange ... stays orange until ... printed".
+// Final Tracking: the lock also remembers the colour of every type (tc=...), kept apart from its t=... mark so the
+// marks already stored on live stay valid. A lock from before tc falls back on the casting's colour set (bc=...).
+// Color Log: its print stores the colours it was printed for on its own row ([inv:cl=...]); a light that went green
+// before that is compared with the colours this browser first loaded (invColourSeen).
+/** Colour per type as the Final Tracking sheet shows it: the set of type + color log pairs, order ignored. */
+function invTypeColourFingerprint(castingId) { return invTypeColourFingerprintRows(getInventoryFor(castingId)); }   // shared with the print's own mark (inventory-marks.js)
+/** One value of the marker stored on the Casting Inventory row ('' when that lock predates it). */
+function invMarkPart(castingId, key) {
+    const m = String(msRow(castingId, 'Casting Inventory')?.note || '').match(INV_MARK_RE);
+    const part = m ? m[1].split(';').find(x => x.startsWith(key + '=')) : null;
+    return part ? part.slice(key.length + 1) : '';
+}
+function invTrackingColoursAsPrinted(castingId) {
+    const tc = invMarkPart(castingId, 'tc');
+    if (tc) return tc === invTypeColourFingerprint(castingId);
+    const bc = invMarkPart(castingId, 'fc') || invBaselineColour(castingId);   // fc: the colour set kept apart when the batch tickets were reprinted
+    return !bc || bc === invColourFingerprint(castingId);
+}
+/** The color logs a casting's pieces use (blank ones left out), order ignored. */
+function invColourSet(castingId) {
+    const ids = [...new Set(getInventoryFor(castingId).map(r => String(r.color_log_id || '')).filter(Boolean))].sort();
+    return invHash(ids.join('|')) + '-' + ids.length;
+}
+const invColourSeen = new Map();   // castingId -> the colour set when this browser first loaded the inventory
+let invColourSeenFor = null;
+function invColourSnap() {
+    if (invColourSeenFor !== currentProjectNumber) { invColourSeen.clear(); invColourSeenFor = currentProjectNumber; }
+    for (const id of currentCastingInventory.keys()) if (!invColourSeen.has(id)) invColourSeen.set(id, invColourSet(id));
+}
+const COLOR_CHANGED_NOTE = 'Color changed after the color log was printed — print the color log again';
+function colourLogMark(r) {
+    const m = String(r?.note || '').match(INV_MARK_RE);
+    const part = m ? m[1].split(';').find(x => x.startsWith('cl=')) : null;
+    return part ? part.slice(3) : '';
+}
 /** The colour logs the inventory uses (rows with pieces), order ignored — stored as bc=… so a colour change is always a reprint. */
 function invColourFingerprint(castingId) { return invColourFingerprintRows(getInventoryFor(castingId)); }
 /** The colour fingerprint stored at the last "ready" ('' when that lock predates it). */
@@ -5205,6 +5370,7 @@ const EARLY_CHANGED_NOTE = 'Printed before Casting Inventory was final and the i
 function invEarlyMarks(castingId, milestone) {
     let m = (INV_MARK_KEYS[milestone] || 'x') + '=' + invFingerprint(castingId, milestone);
     if (milestone === 'Batching Sheets') m += ';bc=' + invColourFingerprint(castingId);
+    if (milestone === 'Final Tracking') m += ';tc=' + invTypeColourFingerprint(castingId);
     return m;
 }
 /** Settle the early prints of a casting against the inventory as it is now: { same: [...], changed: [...] }. */
@@ -5218,7 +5384,8 @@ function ciEarlyPrintsSettle(castingId) {
         const parts = Object.fromEntries(mk[1].split(';').map(p => p.split('=')));
         const key = INV_MARK_KEYS[m];
         const asPrinted = !!parts[key] && parts[key] === invFingerprint(castingId, m)
-            && (m !== 'Batching Sheets' || (!!parts.bc && parts.bc === invColourFingerprint(castingId)));
+            && (m !== 'Batching Sheets' || (!!parts.bc && parts.bc === invColourFingerprint(castingId)))
+            && (m !== 'Final Tracking' || !parts.tc || parts.tc === invTypeColourFingerprint(castingId));   // an early print from before tc: sizes only, as before
         if (asPrinted) { msSet(castingId, m, MS.GREEN, { note: null }); same.push(m); }
         else { msSet(castingId, m, MS.ORANGE, { note: EARLY_CHANGED_NOTE }); changed.push(m); }
     }
@@ -5238,9 +5405,11 @@ function msInventoryChanged(castingId) {
     for (const m of CI_DEPENDENT) {
         const r = msRow(castingId, m);
         if (!r) continue;
-        const asPrinted = !!base[m] && invFingerprint(castingId, m) === base[m];
+        const asPrinted = !!base[m] && invFingerprint(castingId, m) === base[m]
+            && (m !== 'Final Tracking' || invTrackingColoursAsPrinted(castingId));   // the sheet shows the colour of every type
         if (asPrinted) {
-            if (r.status === MS.ORANGE && r.note === INV_CHANGED_NOTE) msSet(castingId, m, MS.GREEN, { note: null });   // this print's fields are back as printed; the stamp stays
+            // this print's fields are back as printed; the stamp stays. Only when the mark really is the printed one.
+            if (r.status === MS.ORANGE && r.note === INV_CHANGED_NOTE && invBaselineIsAsPrinted(castingId, r)) msSet(castingId, m, MS.GREEN, { note: null });
         } else if (r.status === MS.GREEN && !String(r.note || '').startsWith(LAYOUT_CONDITION_PREFIX)) {
             msSet(castingId, m, MS.ORANGE, { note: INV_CHANGED_NOTE });
         }
@@ -5250,8 +5419,21 @@ function msInventoryChanged(castingId) {
 /** Color Log: red = no color on the casting, orange = color entered, green = color log printed since. */
 function deriveColorLogMilestones() {
     if (!msOn() || !msProjectTouched()) return;
+    const invLoaded = currentCastingInventoryLoadedFor === currentProjectNumber;
     for (const c of currentCastings) {
         const r = msRow(c.id, 'Color Log');
+        const changedNote = !!r && r.status === MS.ORANGE && msNote(r) === COLOR_CHANGED_NOTE;
+        if (r && invLoaded && (r.status === MS.GREEN || changedNote)) {
+            // printed for these colours: the print's own record, else what this browser first saw while it was green
+            const printed = colourLogMark(r) || (r.status === MS.GREEN ? invColourSeen.get(c.id) : '') || '';
+            if (printed) {
+                const now = invColourSet(c.id);
+                if (r.status === MS.GREEN && printed !== now) msSet(c.id, 'Color Log', MS.ORANGE, { note: withInvMark(COLOR_CHANGED_NOTE, 'cl=' + printed) });
+                else if (changedNote && printed === now) msSet(c.id, 'Color Log', MS.GREEN, { note: withInvMark('', 'cl=' + printed) });   // back as printed
+            }
+            continue;
+        }
+        if (changedNote) continue;
         if (r && r.status === MS.GREEN) continue;
         const hasColor = getInventoryFor(c.id).some(it => it.color_log_id);
         const want = hasColor ? MS.ORANGE : MS.RED;
@@ -5298,8 +5480,9 @@ async function ciPmReady(castingId) {
 async function ciAdvance(castingId) {
     if (ciStatus(castingId) !== MS.ORANGE) return;   // nothing entered yet, or already ready
     const reprint = await ciBatchReprintCheck(castingId);   // against the as-printed marks, before the new ones replace them
+    const keep = invOutOfDatePrints(castingId, reprint);     // before the marks move: these stay compared with what they were printed from
     const early = ciEarlyPrintsSettle(castingId);           // prints made through the hold: as printed → green, moved → stays orange
-    await msSet(castingId, 'Casting Inventory', MS.GREEN, { locked: true, note: withInvMark(CI_READY_NOTE, invMarks(castingId)), stamp: true });
+    await msSet(castingId, 'Casting Inventory', MS.GREEN, { locked: true, note: withInvMark(CI_READY_NOTE, invMarks(castingId, keep)), stamp: true });
     invEdits.clear();
     ciBatchReprintReport(castingId, reprint);
     ciEarlyPrintsReport(castingId, early);
@@ -5315,6 +5498,7 @@ async function ciBatchReprintCheck(castingId) {
     if (!bcBase || bcBase !== invColourFingerprint(castingId)) return 'changed';   // colour changed, or an older lock with no colour record
     if (getSpecialBatching(currentProjectNumber)) return specialReprintCheck(castingId);   // the Jane Street page compares its own tickets
     try { await ensureBatchTicketsLoaded(); } catch { return 'changed'; }
+    await ensureCastDays();      // a split casting is compared day by day
     return btReprintCheck(castingId) === 'same' ? 'same' : 'changed';
 }
 /** Special batching page (Jane Street): the embedded page compares its own tickets with the inventory as it is now.
@@ -5356,7 +5540,7 @@ function ciBatchReprintReport(castingId, verdict) {
 }
 async function ciUnlock(castingId) {
     // Keep the ready inventory's fingerprint (older locks have none: the inventory as it is now becomes the baseline).
-    await msSet(castingId, 'Casting Inventory', MS.ORANGE, { locked: false, note: withInvMark(CI_UNLOCKED_NOTE, Object.keys(invBaselines(castingId)).length ? invMarks0(castingId) : invMarks(castingId)), stamp: true });
+    await msSet(castingId, 'Casting Inventory', MS.ORANGE, { locked: false, note: withInvMark(CI_UNLOCKED_NOTE, Object.keys(invBaselines(castingId)).length ? invMarks0(castingId) : invMarks(castingId, invOutOfDatePrints(castingId))), stamp: true });
     renderCastings();
 }
 /** The two buttons of the Casting Inventory box. attr: 'data-action' (casting card) or 'data-ms' (floating box). */
@@ -5457,7 +5641,7 @@ function msWhen(r) { return r?.stamped_at ? new Date(r.stamped_at).toLocaleStrin
 function msLine(castingId, milestone, label) {
     const r = msRow(castingId, milestone);
     const s = r?.status || MS.RED, when = msWhen(r);
-    const tip = (r?.note ? r.note + '. ' : '') + (when ? 'Since ' + when : 'Not done yet');
+    const tip = (msNote(r) ? msNote(r) + '. ' : '') + (when ? 'Since ' + when : 'Not done yet');
     return `<div class="pp-ms-line" title="${escapeAttr(tip)}">${msDot(s)}<span class="pp-ms-label">${escapeHtml(label || milestone)}</span>${when ? `<span class="pp-ms-when">${escapeHtml(when)}</span>` : ''}</div>`;
 }
 function msCiLine(castingId) { const s = ciStatus(castingId); return `<div class="pp-ms-line pp-ms-line-ci">${msDot(s)}<span class="pp-ms-label">${escapeHtml(CI_STATE[s].label)}</span></div>`; }
@@ -5894,6 +6078,9 @@ async function activateTrackingTab() {
         ensureCratesLoaded()
     ]);
     renderTracking();
+    // Cast days (2026-11-20): split castings list their panels day by day once the weekly has answered.
+    const daysFor = currentProjectNumber;
+    ensureCastDays().then(() => { if (currentProjectNumber === daysFor && currentTab === 'tracking' && castDaysCfgBy.size) renderTracking(); });
     // Every open re-reads the Casting Inventory and checks the list against it (out-of-band writes included).
     syncTrackingFromInventory({ fresh: true });
 }
@@ -6332,7 +6519,7 @@ function checkFitment() {
         showToast(msg, 'info', 6000);
         return;
     }
-    const components = currentCastingComponents.get(clSelectedCastingId) || [];
+    const components = clCompsOfDay();
     const sides = clSelectedArea === 'AB' ? ['B', 'A'] : [clSelectedArea === 'A' ? 'A' : 'B'];
     let comps = components;
     const lines = [];
@@ -6345,7 +6532,7 @@ function checkFitment() {
         if (!comps.length) break;
     }
     const nBases = Object.keys(clBases).length;
-    const msg = `Check fitment — auto-pack${nBases ? ` with ${nBases} custom base size${nBases === 1 ? '' : 's'}` : ' at inventory size + offset'}, around the other jobs' forms: ${lines.join(' · ')}.`
+    const msg = `Check fitment${clMultiDay() ? ` (Day ${clDayN} · ${clDayLabel(clDateNow())}, ${components.length} form${components.length === 1 ? '' : 's'})` : ''} — auto-pack${nBases ? ` with ${nBases} custom base size${nBases === 1 ? '' : 's'}` : ' at inventory size + offset'}, around the other jobs' forms: ${lines.join(' · ')}.`
         + (nBases ? ` Custom bases: ${Object.entries(clBases).map(([t, b]) => `${t} ${inchesText(b.w)}×${inchesText(b.l)}″`).join(', ')}.` : '');
     if (out) out.textContent = msg;
     showToast(lines.join(' · '), 'info', 6000);
@@ -6390,6 +6577,183 @@ function setCastingInUrl(castingId) {
 }
 function clShortLabel(o) { return `${o.project_number || o.projectName} · Cast ${o.casting_number || '?'}`; }
 
+// ---- Cast days (2026-11-20): a casting the weekly casts over 2+ days is laid out day by day ----
+// The tab shows one day at a time: that day's forms, that day's other jobs, that day's side. Which form is on which
+// day and the side of days 2+ are one settings row per casting (src/utils/layout-days.js). Days are numbers in date
+// order, so the split follows the schedule when it moves. Nothing stored = not split: all forms on Day 1 here, and
+// everywhere else (the weekly, other jobs' estimates) the whole casting on each of its days, as before.
+let clDayN = 1;                                   // the day on screen (1 = the first Cast day on the weekly)
+let clDaysFor = null;                             // the casting clDayN belongs to (another casting starts on Day 1)
+let clDaysCfg = { assign: {}, sides: {} };        // this casting's split
+let clDaysCfgOthers = new Map();                  // castingId -> split of the other castings of the cast days
+let clDayViews = new Map();                       // ISO day -> the other castings as they are ON THAT DAY ('*' = single day)
+let clOverflowIds = [];                           // this day's forms that did not fit (from the last draw)
+function clDayCount() { return Math.max(1, clDay.dates.length); }
+function clMultiDay() { return clDay.dates.length > 1; }
+function clDateNow() { return clDay.dates[clDayN - 1] || clDay.dates[0] || ''; }
+/** The other castings of the day on screen (their side, forms and saved spots of THAT day). */
+function clOthers() { return (clMultiDay() ? clDayViews.get(clDateNow()) : clDayViews.get('*')) || []; }
+/** This casting's side on a day: day 1 is the casting's own side (shared with the weekly's Cast cards). */
+function clMySide(n = clDayN) {
+    const casting = currentCastings.find(c => c.id === clSelectedCastingId);
+    return layoutDaySide(casting?.casting_side, clDaysCfg, clMultiDay() ? n : 1);
+}
+/** This casting's forms of one day (all of them while the casting has a single cast day). */
+function clCompsOfDay(n = clDayN) {
+    const all = currentCastingComponents.get(clSelectedCastingId) || [];
+    if (!clMultiDay()) return all;
+    const keys = placeKeys(all), nDays = clDayCount();
+    return all.filter((c, i) => layoutDayOf(clDaysCfg, keys[i], nDays) === n);
+}
+/** The saved spots that belong to a set of forms (a day's forms only see their own). */
+function clPositionsOf(components) {
+    if (!clMultiDay()) return clLayoutPositions;
+    const ids = new Set(components.map(c => c.id));
+    return clLayoutPositions.filter(p => ids.has(p.component_id));
+}
+async function loadLayoutDaysFor(ids) {
+    const out = new Map();
+    if (!ids.length) return out;
+    try {
+        const rows = await loadSettingRows(ids.map(id => LAYOUT_DAYS_PREFIX + id));
+        for (const [k, v] of rows) out.set(k.slice(LAYOUT_DAYS_PREFIX.length), normLayoutDays(v));
+    } catch (e) { logger.warn('[project-portal] cast-day splits unavailable', e); }
+    return out;
+}
+async function saveLayoutDays() {
+    const id = clSelectedCastingId;
+    const store = castDaysToStore(id, clDaysCfg);
+    try {
+        await setSettingRow(LAYOUT_DAYS_PREFIX + id, layoutDaysEmpty(store) ? null : store);
+        if (layoutDaysEmpty(store)) castDaysCfgBy.delete(id); else castDaysCfgBy.set(id, store);
+        if (clSelectedCastingId === id) clDaysCfg = castDaysCfgOf(id);     // another casting may have been picked meanwhile
+        return true;
+    }
+    catch (e) { logger.error('[project-portal] save cast-day split failed:', e); showToast('The cast-day split was not saved: ' + (e.message || e), 'error'); return false; }
+}
+/** The other castings as each cast day sees them: a split casting brings only that day's forms and that day's side. */
+function clBuildDayViews() {
+    clDayViews = new Map();
+    const viewOn = (o, date) => {
+        const all = o.allDates || [];
+        const nD = Math.max(1, all.length);
+        const ord = Math.max(1, all.indexOf(date) + 1);
+        const cfg = (o.id && clDaysCfgOthers.get(o.id)) || { assign: {}, sides: {} };
+        const split = layoutDaysSplit(cfg, nD);
+        let components = o.components, positions = o.positions;
+        if (split) {
+            const keys = placeKeys(o.components);
+            components = o.components.filter((c, i) => layoutDayOf(cfg, keys[i], nD) === ord);
+            const ids = new Set(components.map(c => c.id));
+            positions = o.positions.filter(p => ids.has(p.component_id));
+        }
+        return { ...o, dayN: ord, dayCount: nD, split, components, positions, casting_side: layoutDaySide(o.casting_side, cfg, ord) || o.casting_side || null };
+    };
+    if (!clMultiDay()) { clDayViews.set('*', clDay.others.map(o => viewOn(o, clDay.dates[0] || ''))); return; }
+    for (const date of clDay.dates) {
+        clDayViews.set(date, clDay.others.filter(o => !Array.isArray(o.dates) || o.dates.includes(date)).map(o => viewOn(o, date)));
+    }
+}
+function clSetDay(n) {
+    if (!clMultiDay() || n === clDayN || !(n >= 1 && n <= clDayCount())) return;
+    clDayN = n;
+    const fr = document.getElementById('pp-clay-fit-result'); if (fr) fr.textContent = '';
+    renderCastingLayoutTab();
+}
+/** Move forms of this casting to another cast day. A form that changes day leaves its saved spot behind. */
+async function clMoveToDay(componentIds, n) {
+    if (!clMultiDay() || !componentIds.length) return;
+    const forId = clSelectedCastingId;
+    const freshCfg = await refreshCastDaysCfg(forId);   // someone else may have changed the split meanwhile
+    if (!freshCfg || clSelectedCastingId !== forId) return;      // not read, or another casting was picked: nothing changes
+    clDaysCfg = freshCfg;
+    const nDays = clDayCount();
+    n = Math.min(nDays, Math.max(1, n));
+    const all = currentCastingComponents.get(clSelectedCastingId) || [];
+    const keys = placeKeys(all);
+    const moved = [];
+    for (const cid of componentIds) {
+        const i = all.findIndex(c => c.id === cid);
+        if (i < 0 || layoutDayOf(clDaysCfg, keys[i], nDays) === n) continue;
+        if (n === 1) delete clDaysCfg.assign[keys[i]]; else clDaysCfg.assign[keys[i]] = n;
+        moved.push(cid);
+    }
+    if (!moved.length) return;
+    const saved = await saveLayoutDays();
+    const had = saved ? clLayoutPositions.filter(p => moved.includes(p.component_id)) : [];
+    try { await Promise.all(had.map(p => deleteLayoutPosition(p.component_id, p.area === 'A' ? 'A' : 'B'))); }
+    catch (e) { logger.warn('[project-portal] forgetting the moved forms\' spots failed', e); }
+    await loadLayoutPositionsForSelected();       // also re-reads the split, so a failed save shows what is really stored
+    renderCastingLayoutTab();
+    if (saved) showToast(`${moved.length} form${moved.length === 1 ? '' : 's'} moved to Day ${n} · ${clDayLabel(clDay.dates[n - 1])}. The weekly's Cast cards follow on their next refresh.`, 'success', 5000);
+}
+/** Undo the split: every form back on Day 1. */
+async function clUnsplit() {
+    const nDays = clDayCount();
+    if (!layoutDaysSplit(clDaysCfg, nDays)) return;
+    if (!window.confirm('Put every form of this casting back on Day 1?\n\nThe weekly goes back to showing the whole casting on each of its cast days. Saved spots of the forms that move are forgotten.')) return;
+    const forId = clSelectedCastingId;
+    const freshCfg = await refreshCastDaysCfg(forId);
+    if (!freshCfg || clSelectedCastingId !== forId) return;
+    clDaysCfg = freshCfg;
+    const all = currentCastingComponents.get(clSelectedCastingId) || [];
+    const keys = placeKeys(all);
+    const moved = all.filter((c, i) => layoutDayOf(clDaysCfg, keys[i], nDays) > 1).map(c => c.id);
+    clDaysCfg.assign = {};
+    const saved = await saveLayoutDays();
+    const had = saved ? clLayoutPositions.filter(p => moved.includes(p.component_id)) : [];
+    try { await Promise.all(had.map(p => deleteLayoutPosition(p.component_id, p.area === 'A' ? 'A' : 'B'))); } catch (e) { /* the forms show in the overflow strip */ }
+    clDayN = 1;
+    await loadLayoutPositionsForSelected();
+    renderCastingLayoutTab();
+    if (saved) showToast('Every form is back on Day 1.', 'success');
+}
+/** The row of day bubbles (only for a casting with 2+ cast days): forms per day, who has each side, and where to send things. */
+function renderClayDays() {
+    const wrap = document.getElementById('pp-clay-days');
+    if (!wrap) return;
+    if (!clSelectedCastingId || !clMultiDay()) { wrap.hidden = true; wrap.innerHTML = ''; return; }
+    const nDays = clDayCount();
+    const all = currentCastingComponents.get(clSelectedCastingId) || [];
+    const keys = placeKeys(all);
+    const perDay = Array.from({ length: nDays }, () => []);
+    all.forEach((c, i) => perDay[layoutDayOf(clDaysCfg, keys[i], nDays) - 1].push(c));
+    const split = layoutDaysSplit(clDaysCfg, nDays);
+    const ownCond = layoutConditionOf(clSelectedCastingId);
+    const typeLine = (list) => {
+        const m = new Map();
+        for (const c of list) { const t = (c.type || '').trim() || '(no type)'; m.set(t, (m.get(t) || 0) + 1); }
+        return [...m].map(([t, q]) => `${t} \u00d7${q}`);
+    };
+    const sidesHtml = (n) => ['A', 'B'].map(area => {
+        const ms = clMySide(n);
+        const mine = ms === area || ms === 'AB';
+        const names = (clDayViews.get(clDay.dates[n - 1]) || []).filter(o => o.casting_side === area || o.casting_side === 'AB').map(clShortLabel);
+        const who = [mine ? 'THIS CASTING' : '', ...names].filter(Boolean);
+        const cls = !who.length ? 'free' : (mine && names.length ? 'shared' : mine ? 'mine' : 'taken');
+        return `<span class="pp-clay-day-side ${cls}" title="Side ${area} on ${escapeAttr(clDayLabel(clDay.dates[n - 1]))}: ${who.length ? escapeAttr(who.join(' + ')) : 'free'}"><b>${area}</b> ${who.length ? escapeHtml(who.join(' + ')) : 'free'}</span>`;
+    }).join('');
+    const bubbles = clDay.dates.map((date, i) => {
+        const n = i + 1, list = perDay[i], types = typeLine(list);
+        const shown = types.length > 4 ? types.slice(0, 4).join(', ') + ` +${types.length - 4} more` : types.join(', ');
+        return `<button type="button" class="pp-clay-day${n === clDayN ? ' pp-clay-day-on' : ''}" data-clay-day="${n}" aria-pressed="${n === clDayN}" title="${escapeAttr(`Day ${n} of ${nDays} · ${clDayLabel(date)}. Click to lay this day out; drag a form here to cast it on this day.${types.length ? ' Forms: ' + types.join(', ') : ''}`)}">
+            <span class="pp-clay-day-top">DAY ${n} · ${escapeHtml(clDayLabel(date))}</span>
+            <span class="pp-clay-day-forms">${ownCond ? 'special condition: no form layout' : `<b>${list.length}</b> form${list.length === 1 ? '' : 's'}${shown ? ' · ' + escapeHtml(shown) : ''}`}</span>
+            <span class="pp-clay-day-sides">${sidesHtml(n)}</span>
+        </button>`;
+    }).join('');
+    const canSend = !ownCond && clOverflowIds.length > 0 && clDayN < nDays;
+    const tools = ownCond ? '' : `<div class="pp-clay-days-tools">
+            ${canSend ? `<button type="button" class="pp-clay-send" data-clay-send="${clDayN + 1}" title="The forms in the overflow strip move to Day ${clDayN + 1} (${escapeAttr(clDayLabel(clDay.dates[clDayN]))}). Lay them out there.">Send the ${clOverflowIds.length} overflow form${clOverflowIds.length === 1 ? '' : 's'} to Day ${clDayN + 1} \u2192</button>` : ''}
+            ${split ? '' : `<span class="pp-clay-days-hint">Not split yet: every form is on Day 1, and the weekly shows the whole casting on each of its ${nDays} cast days.</span>`}
+            ${split ? '<button type="button" class="pp-clay-unsplit" data-clay-unsplit title="Undo the split: every form back on Day 1">Put all forms back on Day 1</button>' : ''}
+        </div>`;
+    // How to move a form between days, always in view (user, 2026-11-20: it was not obvious without being told).
+    const info = ownCond ? '' : `<div class="pp-clay-days-info" role="note"><span class="pp-clay-days-info-i" aria-hidden="true">i</span><span><b>To cast a form on another day:</b> drag the form from the tables (or from the overflow strip) and drop it on that day's box below. Click a day's box to see and lay out that day. You can also type the Day 2 quantities on the Casting Inventory; both show the same split.</span></div>`;
+    wrap.innerHTML = `${info}<div class="pp-clay-days-row">${bubbles}</div>${tools}`;
+    wrap.hidden = false;
+}
+
 /** This casting's cast days as the WEEKLY shows them (its Cast cards, whatever source the weekly is on), and every
  *  other casting the weekly has in Cast on those days. The portal cast date only stands in for this casting when the
  *  weekly has no Cast card for it yet. */
@@ -6397,6 +6761,8 @@ async function loadCastDayContext() {
     const id = clSelectedCastingId;
     clDay = { castingId: id, dates: [], source: '', others: [] };
     clBasesOthers = new Map();
+    clDaysCfgOthers = new Map();
+    clDayViews = new Map();
     const casting = currentCastings.find(c => c.id === id);
     if (!casting) return;
     await loadCondTables([layoutConditionOf(id)], { fresh: true });
@@ -6416,7 +6782,7 @@ async function loadCastDayContext() {
         }
         const castTasks = tasks.filter(t => t.department === 'Cast' && parseDate(t.date));
         const isMine = t => String(t.projectNumber || '').trim() === pn && String(t.castingNumber || '').trim() === cn;
-        let dates = [...new Set(castTasks.filter(isMine).map(t => isoDay(parseDate(t.date))))].sort();
+        let dates = castDayDates(castTasks.filter(isMine).map(t => ({ iso: isoDay(parseDate(t.date)), day: t.castingDayNumber })));   // Day n = the card with staging day n
         let source = dates.length ? 'weekly' : '';
         if (!dates.length && isoOfDate(casting.casting_date)) { dates = [isoOfDate(casting.casting_date)]; source = 'portal'; }
         clDay.dates = dates; clDay.source = source;
@@ -6427,9 +6793,17 @@ async function loadCastDayContext() {
             if (isMine(t) || !dates.includes(isoDay(parseDate(t.date)))) continue;
             const tpn = String(t.projectNumber || '').trim(), tcn = String(t.castingNumber || '').trim();
             const key = tpn ? `${tpn}|${tcn}` : `name|${String(t.project || '').trim().toLowerCase()}`;
-            const e = byKey.get(key) || { key, project_number: tpn, casting_number: tcn, taskName: String(t.resolvedProjectName || t.project || '').trim(), taskSide: null };
+            const e = byKey.get(key) || { key, project_number: tpn, casting_number: tcn, taskName: String(t.resolvedProjectName || t.project || '').trim(), taskSide: null, dates: new Set(), allDates: new Set() };
             if (!e.taskSide && ['A', 'B', 'AB'].includes(t.castingSide)) e.taskSide = t.castingSide;
+            e.dates.add(isoDay(parseDate(t.date)));          // which of THIS casting's days they share
             byKey.set(key, e);
+        }
+        // Every cast day of each of them (also the ones this casting is not on): their Day 1 / Day 2 numbering.
+        for (const t of castTasks) {
+            if (isMine(t)) continue;
+            const tpn = String(t.projectNumber || '').trim(), tcn = String(t.castingNumber || '').trim();
+            const e = byKey.get(tpn ? `${tpn}|${tcn}` : `name|${String(t.project || '').trim().toLowerCase()}`);
+            if (e) e.allDates.add(isoDay(parseDate(t.date)) + '|' + (t.castingDayNumber || ''));
         }
         if (!byKey.size) return;
         // Portal records of those castings (side, forms, saved layout, special condition) by job + cast number.
@@ -6445,6 +6819,7 @@ async function loadCastDayContext() {
                 projectName: e.project_number ? (clProjectNames.get(e.project_number) || e.taskName) : e.taskName,
                 casting_side: ['A', 'B', 'AB'].includes(r?.casting_side) ? r.casting_side : e.taskSide,
                 inPortal: !!r,
+                dates: [...e.dates].sort(), allDates: castDayDates([...e.allDates].map(x => ({ iso: x.split('|')[0], day: x.split('|')[1] }))),
                 cond: null, components: [], positions: []
             };
         });
@@ -6452,7 +6827,9 @@ async function loadCastDayContext() {
         const conds = ids.length ? await loadLayoutConditionsForCastings(ids) : [];
         const condBy = new Map(conds.map(c => [c.casting_id, c]));
         await loadCondTables(conds.map(c => c.name), { fresh: true });
-        const sided = others.filter(o => o.id && ['A', 'B', 'AB'].includes(o.casting_side));
+        clDaysCfgOthers = await loadLayoutDaysFor(ids);
+        // every portal casting, not only the ones with a side of their own: a later day can carry its own side
+        const sided = others.filter(o => o.id);
         const [compsMap, posList] = await Promise.all([
             sided.length ? loadAllComponentsForProject(sided.map(o => o.id)) : new Map(),
             Promise.all(sided.map(o => loadLayoutPositions(o.id).catch(() => [])))
@@ -6468,9 +6845,12 @@ async function loadCastDayContext() {
         clDay.others = others.sort((x, y) => String(x.project_number).localeCompare(String(y.project_number)) || String(x.casting_number).localeCompare(String(y.casting_number)));
     } catch (e) {
         logger.error('[project-portal] cast-day context failed:', e);
+    } finally {
+        if (clDayN > clDayCount()) clDayN = 1;
+        clBuildDayViews();
     }
 }
-function clTakenBy(area) { return clDay.others.filter(o => o.casting_side === area || o.casting_side === 'AB'); }
+function clTakenBy(area) { return clOthers().filter(o => o.casting_side === area || o.casting_side === 'AB'); }
 /** The other castings' forms on one side, as blocked rectangles for the packer and the drawing. With several other
  *  jobs on the side, each estimate is packed around the ones before it (box order), as the floor would do it;
  *  a saved layout always sits where it was saved. */
@@ -6492,7 +6872,7 @@ function clBlockedFor(area) {
     // A casting under a special condition is never laid out on the tables: it blocks the tables its condition
     // uses and nothing else (2026-11-12). Those are certain, so they go first; form estimates pack around them.
     const out = clOwnCondBlocked(area);
-    for (const o of clDay.others) {
+    for (const o of clOthers()) {
         const sd = clCondSideOfOther(o);
         if (sd === area || sd === 'AB') out.push(...clCondRects(o.cond.name, area, clShortLabel(o), false));
     }
@@ -6517,7 +6897,7 @@ function clBlockedFor(area) {
 /** Only the special-condition tables of a side (this casting's and the others'). */
 function clBlockedCondOnly(area) {
     const out = clOwnCondBlocked(area);
-    for (const o of clDay.others) {
+    for (const o of clOthers()) {
         const sd = clCondSideOfOther(o);
         if (sd === area || sd === 'AB') out.push(...clCondRects(o.cond.name, area, clShortLabel(o), false));
     }
@@ -6526,7 +6906,8 @@ function clBlockedCondOnly(area) {
 /** Where the other casting goes in a swap: this casting's side, or the other side when this casting has none. */
 function clSwapTarget(area, mySide) { return (mySide === 'A' || mySide === 'B') ? mySide : (area === 'A' ? 'B' : 'A'); }
 function clSwapAllowed(o, area, mySide) {
-    return !!o.id && o.casting_side === area && mySide !== 'AB' && mySide !== area;
+    return !!o.id && o.casting_side === area && mySide !== 'AB' && mySide !== area
+        && (!clMultiDay() || clDayN === 1) && (o.dayN || 1) === 1;   // a later day's side is that day's own: no swap there
 }
 function clSwapTitle(o, area, mySide) {
     const casting = currentCastings.find(c => c.id === clSelectedCastingId);
@@ -6535,14 +6916,14 @@ function clSwapTitle(o, area, mySide) {
 /** Swap sides with another casting of the cast day (2026-11-06): this casting takes theirs, they take this one's. */
 async function clSwapSides(otherId) {
     const casting = currentCastings.find(c => c.id === clSelectedCastingId);
-    const other = clDay.others.find(o => o.id === otherId);
+    const other = clOthers().find(o => o.id === otherId);
     if (!casting || !other) return;
-    const mySide = ['A', 'B', 'AB'].includes(casting.casting_side) ? casting.casting_side : '';
+    const mySide = clMySide();
     const take = other.casting_side, give = clSwapTarget(take, mySide);
     if (!clSwapAllowed(other, take, mySide)) return;
     const alsoThere = clTakenBy(give).filter(o => o.id !== other.id && o.id !== casting.id);
     const stillThere = clTakenBy(take).filter(o => o.id !== other.id && o.id !== casting.id);
-    const days = clDay.dates.map(clDayLabel).join(', ');
+    const days = clMultiDay() ? clDayLabel(clDateNow()) : clDay.dates.map(clDayLabel).join(', ');
     const msg = `Swap sides on ${days}?\n\n` +
         `Cast ${casting.casting_number || ''} (this job) → Side ${take}\n${clOtherLabel(other)} → Side ${give}` +
         (stillThere.length ? `\n\nNote: Cast ${casting.casting_number || ''} will share Side ${take} with ${stillThere.map(clOtherLabel).join(', ')}.` : '') +
@@ -6557,8 +6938,10 @@ async function clSwapSides(otherId) {
         showToast('Sides not swapped — ' + (err.message || err), 'error');
         return;
     }
-    other.casting_side = give;
+    const otherBase = clDay.others.find(o => o.id === otherId);
+    if (otherBase) otherBase.casting_side = give;
     casting.casting_side = take;
+    clBuildDayViews();
     showToast(`Swapped: Cast ${casting.casting_number || ''} → Side ${take}, ${clOtherLabel(other)} → Side ${give}`, 'success');
     syncClaySideSelect();
     renderCastingLayoutTab();
@@ -6584,7 +6967,7 @@ function renderClayFloat() {
         });
     }
     const casting = currentCastings.find(c => c.id === clSelectedCastingId);
-    const mySide = ['A', 'B', 'AB'].includes(casting?.casting_side) ? casting.casting_side : '';
+    const mySide = clMySide();
     const mine = (area) => mySide === area || mySide === 'AB';
     let tone = 'free', html = '';
     if (!clDay.dates.length) {
@@ -6592,7 +6975,7 @@ function renderClayFloat() {
         html = `<div class="pp-clay-float-title">CAST DAY — NOT KNOWN</div>
             <div class="pp-clay-float-text">This casting has no Cast card on the weekly and no cast date in the portal, so the sides cannot be checked. Schedule it, or enter a Cast Date on the Casting Inventory tab.</div>`;
     } else {
-        const days = clDay.dates.map(clDayLabel).join(', ');
+        const days = clMultiDay() ? `DAY ${clDayN} OF ${clDayCount()} · ${clDayLabel(clDateNow())}` : clDay.dates.map(clDayLabel).join(', ');
         const src = clDay.source === 'weekly' ? 'weekly' : 'portal cast date — this casting has no Cast card on the weekly yet';
         // a condition without a side of its own counts on its casting's side; one with neither shows under "side not set"
         const condOn = (o, area) => { if (!o.cond) return false; const sd = o.cond.side || o.casting_side; return sd === area || sd === 'AB'; };
@@ -6600,7 +6983,7 @@ function renderClayFloat() {
         const sideHtml = (area) => {
             const taken = clTakenBy(area);
             // a condition belongs under its casting; one whose casting sits on the other side gets its own line
-            const condElsewhere = clDay.others.filter(o => condOn(o, area) && !taken.includes(o));
+            const condElsewhere = clOthers().filter(o => condOn(o, area) && !taken.includes(o));
             // Only special conditions with picked tables on this side: the side is taken in part, the rest is open.
             const occ = [...taken, ...condElsewhere];
             const condOnly = occ.length > 0 && occ.every(o => condOn(o, area) && condTablesFor(o.cond.name, area));
@@ -6610,12 +6993,12 @@ function renderClayFloat() {
             const cls = state === 'FREE' ? 'free' : (mine(area) ? 'taken-mine' : 'taken');
             return `<div class="pp-clay-float-side pp-clay-float-${cls}">
                 <div class="pp-clay-float-side-head"><span>SIDE ${area}</span><span>${state}${mine(area) ? ' · THIS CASTING' : ''}</span></div>
-                ${taken.map(o => `<div class="pp-clay-float-line">${clOtherLink(o)}${o.casting_side === 'AB' ? ' (both sides)' : ''}${o.components.length ? '' : (o.inPortal === false ? '' : ' — no forms on file')}${clSwapAllowed(o, area, mySide) ? ` <button type="button" class="pp-clay-swap" data-clay-swap="${escapeAttr(o.id)}" title="${escapeAttr(clSwapTitle(o, area, mySide))}">Swap sides</button>` : ''}</div>${condOn(o, area) ? `<div class="pp-clay-float-cond pp-clay-float-cond-under">↳ special condition: ${escapeHtml(o.cond.name)} — ${escapeHtml(condUsesText(o.cond.name, area))}</div>` : ''}`).join('')}
+                ${taken.map(o => `<div class="pp-clay-float-line">${clOtherLink(o)}${o.casting_side === 'AB' ? ' (both sides)' : ''}${o.split ? ` — its Day ${o.dayN} of ${o.dayCount}: ${o.components.length} form${o.components.length === 1 ? '' : 's'}` : (o.components.length ? '' : (o.inPortal === false ? '' : ' — no forms on file'))}${clSwapAllowed(o, area, mySide) ? ` <button type="button" class="pp-clay-swap" data-clay-swap="${escapeAttr(o.id)}" title="${escapeAttr(clSwapTitle(o, area, mySide))}">Swap sides</button>` : ''}</div>${condOn(o, area) ? `<div class="pp-clay-float-cond pp-clay-float-cond-under">↳ special condition: ${escapeHtml(o.cond.name)} — ${escapeHtml(condUsesText(o.cond.name, area))}</div>` : ''}`).join('')}
                 ${condElsewhere.map(o => `<div class="pp-clay-float-cond">Special condition here: ${escapeHtml(o.cond.name)} (${escapeHtml(condUsesText(o.cond.name, area))}) — ${clOtherLink(o)}${['A', 'B'].includes(o.casting_side) ? ` (that casting is on Side ${o.casting_side})` : ''}</div>`).join('')}
                 ${condOnly && used.size && openT.length ? `<div class="pp-clay-float-open">Open for other jobs: ${escapeHtml(openT.map(t => t.name).join(', '))}</div>` : ''}
             </div>`;
         };
-        const unsetAll = clDay.others.filter(o => !['A', 'B', 'AB'].includes(o.casting_side));
+        const unsetAll = clOthers().filter(o => !['A', 'B', 'AB'].includes(o.casting_side));
         const unset = unsetAll.filter(o => o.inPortal !== false);
         const notPortal = unsetAll.filter(o => o.inPortal === false);
         let fit = '';
@@ -6635,7 +7018,7 @@ function renderClayFloat() {
             }
         } else if (!mySide) tone = 'warn';
         html = `<div class="pp-clay-float-title">CAST DAY · ${escapeHtml(days)}</div>
-            <div class="pp-clay-float-text">${clDay.others.length ? `${clDay.others.length} other casting${clDay.others.length === 1 ? '' : 's'} that day` : 'No other casting that day'} (from the ${src})${mySide ? '' : ' — pick this casting\'s side'}.</div>
+            <div class="pp-clay-float-text">${clOthers().length ? `${clOthers().length} other casting${clOthers().length === 1 ? '' : 's'} that day` : 'No other casting that day'} (from the ${src})${mySide ? '' : ' — pick this casting\'s side'}.</div>
             ${sideHtml('A')}${sideHtml('B')}
             ${unset.length ? `<div class="pp-clay-float-unset">Side not set yet: ${unset.map(o => clOtherLink(o) + (o.cond && !o.cond.side ? ` — <span class="pp-clay-float-cond-inline">${condText(o)}</span>` : '')).join('; ')}</div>` : ''}
             ${notPortal.length ? `<div class="pp-clay-float-also">Also on the weekly's Cast row that day (not portal castings): ${notPortal.map(o => escapeHtml(o.projectName || o.project_number || '?')).join('; ')}</div>` : ''}
@@ -6657,11 +7040,12 @@ function placeClayFloat() {
 window.addEventListener('resize', placeClayFloat, { passive: true });
 
 function syncClaySideSelect() {
-    const casting = currentCastings.find(c => c.id === clSelectedCastingId);
-    const side = ['A', 'B', 'AB'].includes(casting?.casting_side) ? casting.casting_side : '';
+    const side = clMySide();        // the side of the day on screen (a single-day casting: the casting's own side)
     clSelectedArea = side || 'B';   // the layout draws the casting's side; nothing stored = Side B, as before
     const el = document.getElementById('pp-clay-side');
     if (el) el.value = side;
+    const lab = document.getElementById('pp-clay-side-label');
+    if (lab) lab.textContent = clMultiDay() ? `Casting side · Day ${clDayN}` : 'Casting side';
 }
 async function activateCastingLayoutTab() {
     const needsSave = document.getElementById('pp-clay-needs-save');
@@ -6737,6 +7121,10 @@ async function loadLayoutPositionsForSelected() {
             ? await loadLayoutPositions(clSelectedCastingId)
             : [];
         clBases = clSelectedCastingId ? ((await loadLayoutBasesFor([clSelectedCastingId])).get(clSelectedCastingId) || {}) : {};
+        if (clDaysFor !== clSelectedCastingId) { clDaysFor = clSelectedCastingId; clDayN = 1; }
+        if (clSelectedCastingId && currentCastingInventoryLoadedFor !== currentProjectNumber) await loadAllInventoryForCurrentProject();   // the split is read against the inventory
+        // the Casting Inventory and Tracking read the same split; a failed read keeps the copy in memory (and says so)
+        clDaysCfg = clSelectedCastingId ? ((await refreshCastDaysCfg(clSelectedCastingId)) || castDaysCfgOf(clSelectedCastingId)) : { assign: {}, sides: {} };
         if (Array.isArray(clLayoutPositions) && clLayoutPositions.length) markWorking(clSelectedCastingId, 'Casting Layout', 'Forms laid out', true);
     } catch (e) {
         logger.error('[project-portal] loadLayoutPositions failed:', e);
@@ -6749,11 +7137,12 @@ function renderCastingLayoutTab() {
     const card = document.getElementById('pp-clay-card');
     const errorEl = document.getElementById('pp-clay-error');
     if (!card) return;
+    syncClaySideSelect();        // the side belongs to the day on screen
 
     const casting = currentCastings.find(c => c.id === clSelectedCastingId);
-    const components = currentCastingComponents.get(clSelectedCastingId) || [];
+    const components = clCompsOfDay();     // a casting with 2+ cast days: the forms of the day on screen
     const title = casting
-        ? `${currentProjectNumber} — ${castingLayoutLabel(casting)}`
+        ? `${currentProjectNumber} — ${castingLayoutLabel(casting)}${clMultiDay() ? ` — DAY ${clDayN} of ${clDayCount()} · ${clDayLabel(clDateNow())}` : ''}`
         : 'Casting Layout';
 
     // Both sides, side by side, always (2026-11-06): this casting's forms on its side(s), the other jobs' forms of the
@@ -6766,7 +7155,7 @@ function renderCastingLayoutTab() {
     const cardB = document.createElement('div'); cardB.className = 'pp-clay-card-side'; cardB.dataset.side = 'B';
     card.append(cardA, cardB);
     const quiet = document.createElement('div');
-    const common = { offsetPerSide: clOffsetPerSide, gapBetween: clGapBetween, positions: clLayoutPositions, title, bases: clBases };
+    const common = { offsetPerSide: clOffsetPerSide, gapBetween: clGapBetween, positions: clPositionsOf(components), title, bases: clBases };
     const ownCond = layoutConditionOf(clSelectedCastingId);
     if (ownCond) {
         // Special condition (2026-11-12): the forms are not laid out on the tables. Both sides draw the tables only:
@@ -6815,14 +7204,34 @@ function renderCastingLayoutTab() {
         const placedN = ownHandles.reduce((n, h) => n + h.placed.length, 0);
         clFitInfo = { placed: placedN, total: placedN + (last.staged || []).length, clashes: ownHandles.reduce((n, h) => n + (h.clashes || []).length, 0) };
     } else clFitInfo = null;
+    // Cast days: what did not fit today can be sent to the next day; the bubbles are drop targets for single forms.
+    clOverflowIds = ownHandles.length ? (ownHandles[ownHandles.length - 1].staged || []).map(r => r.componentId).filter(Boolean) : [];
+    renderClayDays();
+    fitClayCard();               // the day row changes how much room is left under it
     renderClayFloat();
+    const dayUnder = (el) => (el && el.closest) ? el.closest('#pp-clay-days [data-clay-day]') : null;
+    const clearDrop = (keep) => document.querySelectorAll('.pp-clay-day-drop').forEach(x => { if (x !== keep) x.classList.remove('pp-clay-day-drop'); });
     for (const handle of ownHandles) {
         attachLayoutDrag(handle, {
             castingId: clSelectedCastingId,
             area: handle.area,
             onCommit: commitLayoutPositions,
             onStagedClick: openBaseModal,
-            onUnplace: unplaceForm
+            onUnplace: unplaceForm,
+            onDragOver: (el) => {
+                const hit = dayUnder(el);
+                const target = hit && Number(hit.dataset.clayDay) !== clDayN ? hit : null;
+                clearDrop(target);
+                if (target) target.classList.add('pp-clay-day-drop');
+            },
+            onDropElsewhere: (rec, ctx, el) => {
+                clearDrop(null);
+                const hit = dayUnder(el);
+                if (!hit) return false;
+                const n = Number(hit.dataset.clayDay);
+                if (n !== clDayN && rec.componentId) clMoveToDay([rec.componentId], n);
+                return true;
+            }
         });
     }
     // The reset button only makes sense once a layout has been customized.
@@ -6901,9 +7310,19 @@ async function commitLayoutPositions(rows) {
 /** Discard the manual layout for the current casting area, back to auto-pack. */
 async function resetCastingLayout() {
     if (!clSelectedCastingId) return;
-    if (!confirm('Discard the manual layout for this casting area and return to automatic packing?')) return;
+    if (!confirm(clMultiDay()
+        ? `Discard the manual layout of Day ${clDayN} (${clDayLabel(clDateNow())}) and return to automatic packing? The other days keep theirs.`
+        : 'Discard the manual layout for this casting area and return to automatic packing?')) return;
     try {
-        for (const area of (clSelectedArea === 'AB' ? ['A', 'B'] : [clSelectedArea])) await clearLayoutPositions(clSelectedCastingId, area);
+        const areas = clSelectedArea === 'AB' ? ['A', 'B'] : [clSelectedArea];
+        if (clMultiDay()) {
+            // only the spots of the forms of the day on screen
+            const ids = new Set(clCompsOfDay().map(c => c.id));
+            const mine = clLayoutPositions.filter(p => ids.has(p.component_id) && areas.includes(p.area === 'A' ? 'A' : 'B'));
+            await Promise.all(mine.map(p => deleteLayoutPosition(p.component_id, p.area === 'A' ? 'A' : 'B')));
+        } else {
+            for (const area of areas) await clearLayoutPositions(clSelectedCastingId, area);
+        }
         await loadLayoutPositionsForSelected();
     } catch (e) {
         logger.error('[project-portal] resetCastingLayout failed:', e);
@@ -6964,13 +7383,13 @@ function printLayoutConditionNotice(castingId, cond) {
     msSet(castingId, 'Casting Layout', MS.GREEN, { note: layoutConditionNote(cond, layoutConditionSideOf(castingId)), stamp: true });   // the notice is printed: green (side kept)
 }
 function printCastingLayoutNow() {
-    let svgEls = [...document.querySelectorAll('#pp-clay-card svg')];   // both sides are drawn; print the ones with this casting's forms
-    const withOwn = svgEls.filter(el => el.querySelector('g.clay-mold'));
-    if (withOwn.length) svgEls = withOwn;
-    if (!svgEls.length) { alert('No layout to print yet.'); return false; }
     // Print on 11x17 (tabloid) portrait so the layout scales up and stays readable; each SVG is cropped to
     // its drawn content and gets its own page.
-    const pages = svgEls.map(svgEl => {
+    const collect = () => {
+      let svgEls = [...document.querySelectorAll('#pp-clay-card svg')];   // both sides are drawn; print the ones with this casting's forms
+      const withOwn = svgEls.filter(el => el.querySelector('g.clay-mold'));
+      if (withOwn.length) svgEls = withOwn;
+      return svgEls.map(svgEl => {
         const printSvg = svgEl.cloneNode(true);
         try {
             const bb = svgEl.getBBox();
@@ -6981,7 +7400,26 @@ function printCastingLayoutNow() {
             }
         } catch (e) { /* keep the original viewBox if getBBox is unavailable */ }
         return printSvg.outerHTML;
-    });
+      });
+    };
+    // A casting with 2+ cast days (2026-11-20): every page carries a big DAY label; once the casting is split, one
+    // print gives every day that has forms (each day is drawn in turn, then the screen goes back to its day).
+    let pages = [];
+    if (clMultiDay()) {
+        const nDays = clDayCount(), keep = clDayN;
+        const split = layoutDaysSplit(clDaysCfg, nDays);
+        // not split: every form is on Day 1, so that is the sheet, without a DAY label (the casting is not planned by day)
+        const days = split ? clDay.dates.map((_, i) => i + 1).filter(n => clCompsOfDay(n).length) : [1];
+        for (const n of days) {
+            if (n !== clDayN) { clDayN = n; renderCastingLayoutTab(); }
+            const label = split ? `DAY ${n} OF ${nDays} \u00b7 ${clDayLabel(clDay.dates[n - 1])}` : '';
+            for (const svg of collect()) pages.push({ svg, label });
+        }
+        if (clDayN !== keep) { clDayN = keep; renderCastingLayoutTab(); }
+    } else {
+        pages = collect().map(svg => ({ svg, label: '' }));
+    }
+    if (!pages.length) { alert('No layout to print yet.'); return false; }
     const w = window.open('', '_blank');
     if (!w) return;
     w.document.write(`<!DOCTYPE html>
@@ -6992,8 +7430,10 @@ function printCastingLayoutNow() {
   .page { page-break-after: always; }
   .page:last-child { page-break-after: auto; }
   svg { width: 10in; height: 16in; display: block; margin: 0 auto; }
+  .day { font: 800 30pt Arial, sans-serif; text-align: center; letter-spacing: .04em; border: 4px solid #000; border-radius: 8px; padding: 6pt 0; margin: 0 0 0.15in; height: 0.55in; line-height: 0.55in; }
+  .page.has-day svg { height: 15in; }
 </style></head>
-<body>${pages.map(p => `<div class="page">${p}</div>`).join('')}</body></html>`);
+<body>${pages.map(p => `<div class="page${p.label ? ' has-day' : ''}">${p.label ? `<div class="day">${escapeHtml(p.label)}</div>` : ''}${p.svg}</div>`).join('')}</body></html>`);
     w.document.close();
     w.focus();
     w.print();
@@ -7210,9 +7650,13 @@ function renderTrackSection(casting) {
         : '';
     const desc = casting.description ? `<span class="pp-track-section-desc">${escapeHtml(casting.description)}</span>` : '';
 
+    const dayGroups = castDayGroups(casting, components);      // a casting split over its cast days: day by day
     const cardsHtml = count === 0
         ? `<div class="pp-opt-cards-empty">No components — add inventory in the Castings tab.</div>`
-        : components.map(comp => renderTrackCard(comp, casting.id)).join('');
+        : dayGroups
+            ? dayGroups.map(g => `<div class="pp-track-day-head" title="Split on the Casting Inventory / Casting Layout tab. The dates come from the weekly."><b>DAY ${g.n} OF ${g.of}</b> \u00b7 ${escapeHtml(castDayLong(g.date))}<span>${g.comps.length} panel${g.comps.length === 1 ? '' : 's'}</span></div>`
+                + g.comps.map(comp => renderTrackCard(comp, casting.id)).join('')).join('')
+            : components.map(comp => renderTrackCard(comp, casting.id)).join('');
 
     const allIds = components.map(c => c.id);
     const allSelected = count > 0 && allIds.every(id => selectedComponentIds.has(id));
@@ -7277,7 +7721,7 @@ function renderTrackSection(casting) {
                         <span>Tracking</span>
                     </button>
                 </div>
-                <span class="pp-track-section-counts"><span class="pp-track-section-count">${count} ${count === 1 ? 'component' : 'components'}</span>${remakeBadge}</span>
+                <span class="pp-track-section-counts"><span class="pp-track-section-count">${count} ${count === 1 ? 'component' : 'components'}</span>${dayGroups ? `<span class="pp-track-section-days" title="This casting is split over its cast days: the labels and the tracking sheet print day by day">${dayGroups.map(g => `Day ${g.n}: ${g.comps.length}`).join(' \u00b7 ')}</span>` : ''}${remakeBadge}</span>
                 ${rejectedBadge}
                 ${trackMsHtml(casting.id)}
             </div>
@@ -7486,7 +7930,7 @@ async function runTrackingSync(opts = {}) {
         await loadAllInventoryForCurrentProject();
     } else if (opts.fresh) {
         // Re-read without touching the Castings tab's edit marks / tick boxes (a plain data refresh).
-        try { currentCastingInventory = await loadAllInventoryForProject(currentCastings.map(c => c.id)); }
+        try { currentCastingInventory = await loadAllInventoryForProject(currentCastings.map(c => c.id)); invColourSnap(); }
         catch (err) { logger.error('[project-portal] fresh inventory read for the tracking check failed:', err); }
     }
     if (currentCastingComponents.size === 0) {
@@ -8299,6 +8743,7 @@ async function showStandardColorsView() {
     document.getElementById('pp-list-view').hidden = true;
     document.getElementById('pp-form-view').hidden = true;
     updateMsFloat();
+    renderClayFloat();   // the Casting Layout's cast-day box goes with the project
     const memosView = document.getElementById('pp-memos-view');
     if (memosView) memosView.hidden = true;
     const scView = document.getElementById('pp-standards-view');
@@ -8916,6 +9361,7 @@ async function reloadColorLinkedRowsForProject() {
     ]);
     currentCastingComponents = compsMap;
     currentCastingInventory = invMap;
+    invColourSnap();
 }
 
 // ---------- Multi-color helpers ----------
@@ -9458,6 +9904,7 @@ async function showRecentMemosView() {
     document.getElementById('pp-list-view').hidden = true;
     document.getElementById('pp-form-view').hidden = true;
     updateMsFloat();
+    renderClayFloat();   // the Casting Layout's cast-day box goes with the project
     const memosView = document.getElementById('pp-memos-view');
     if (memosView) memosView.hidden = false;
     const scViewRM = document.getElementById('pp-standards-view');
@@ -9985,17 +10432,28 @@ function wireEvents() {
         if (!casting) return;
         // A side another job already casts on that day: say who, and ask (2026-11-06). The layout then packs this
         // casting into the room they leave.
-        const prevSide = ['A', 'B', 'AB'].includes(casting.casting_side) ? casting.casting_side : '';
+        const dayN = clMultiDay() ? clDayN : 1;
+        const prevSide = clMySide();
         const areas = side === 'AB' ? ['A', 'B'] : side ? [side] : [];
         const taken = [...new Set(areas.flatMap(a => clTakenBy(a).map(o => `Side ${a}: ${clOtherLabel(o)}`)))];
         if (taken.length && clDay.dates.length) {
-            const ok = window.confirm(`On ${clDay.dates.map(clDayLabel).join(', ')} this side is already in use:\n\n${taken.join('\n')}\n\nPut Cast ${casting.casting_number || ''} there too? The layout will pack its forms into the room they leave; their forms show hatched grey.`);
+            const ok = window.confirm(`On ${clMultiDay() ? clDayLabel(clDateNow()) : clDay.dates.map(clDayLabel).join(', ')} this side is already in use:\n\n${taken.join('\n')}\n\nPut Cast ${casting.casting_number || ''} there too? The layout will pack its forms into the room they leave; their forms show hatched grey.`);
             if (!ok) { e.target.value = prevSide; return; }
         }
         try {
+            if (dayN > 1) {
+                // a later cast day keeps its own side with the split; "not set" = the casting's own side again
+                const forId = clSelectedCastingId;
+                const freshCfg = await refreshCastDaysCfg(forId);
+                if (!freshCfg || clSelectedCastingId !== forId) { e.target.value = prevSide; return; }
+                clDaysCfg = freshCfg;
+                if (side) clDaysCfg.sides[String(dayN)] = side; else delete clDaysCfg.sides[String(dayN)];
+                if (await saveLayoutDays()) showToast(`Cast ${casting.casting_number}, Day ${dayN}: ${side === 'AB' ? 'both sides (A + B)' : side ? 'Side ' + side : "the casting's own side"} — the weekly's Cast card of that day follows on its next refresh.`);
+            } else {
             await updateCasting(casting.id, { casting_side: side });
             casting.casting_side = side;
             showToast(`Cast ${casting.casting_number}: ${side === 'AB' ? 'both sides (A + B)' : side ? 'Side ' + side : 'no side'} — the weekly's Cast cards follow on their next refresh.`);
+            }
         } catch (err) {
             logger.error('[project-portal] casting side save failed:', err);
             showToast(side === 'AB' ? 'Not saved — run migration/casting-side-both.sql in Supabase first' : 'Side not saved — run migration/casting-side.sql in Supabase first', 'error');
@@ -10012,6 +10470,14 @@ function wireEvents() {
         const v = parseFloat(e.target.value);
         clGapBetween = (Number.isFinite(v) && v >= 0) ? v : 0;
         renderCastingLayoutTab();
+    });
+    // Cast days (2026-11-20): pick a day, send the overflow on, undo the split
+    document.getElementById('pp-clay-days')?.addEventListener('click', async (e) => {
+        const send = e.target.closest('[data-clay-send]');
+        if (send) { await clMoveToDay(clOverflowIds.slice(), Number(send.dataset.claySend)); return; }
+        if (e.target.closest('[data-clay-unsplit]')) { await clUnsplit(); return; }
+        const b = e.target.closest('[data-clay-day]');
+        if (b) clSetDay(Number(b.dataset.clayDay));
     });
     document.getElementById('pp-clay-print-btn')?.addEventListener('click', printCastingLayout);
     document.getElementById('pp-clay-reset-btn')?.addEventListener('click', resetCastingLayout);
@@ -10854,6 +11320,12 @@ function wireEvents() {
             handleSelectBatchColor(colorPill.dataset.colorKey || '');
             return;
         }
+        const scopeBtn = e.target.closest('[data-bt-totals-scope]');
+        if (scopeBtn) {                                          // Mix Day Totals: Day / Job switch (2026-11-24)
+            btTotalsScope = scopeBtn.dataset.btTotalsScope || 'day';
+            renderBatchTicketsContent();
+            return;
+        }
         if (e.target.closest('[data-bt-import]')) {
             handleImportBatchFromTracking(currentBatchCastingId);
         }
@@ -10998,6 +11470,9 @@ function wireEvents() {
             handleAddInventoryItem(castingId);
         } else if (action === 'open-import-remakes') {
             if (!btn.disabled) openImportRemakesModal(castingId);
+        } else if (action === 'fill-from-master') {
+            // a value still being typed is saved first, so the fill sees the rows as they are
+            if (!btn.disabled) flushPendingSaves().then(() => typeMasterFill(castingId));
         } else if (action === 'copy-components') {
             if (!btn.disabled) handleCopyComponents(castingId);
         } else if (action === 'paste-components') {
@@ -11017,6 +11492,21 @@ function wireEvents() {
         } else if (action === 'cut-selected') {
             handleCutSelected(castingId);
         }
+    });
+    // Cast days (2026-11-20): a Day box of a row, Enter to the same box one row down, and the undo button.
+    castingsList.addEventListener('change', (e) => { if (e.target.matches('.pp-inv-day-input')) handleInvDayInput(e.target); });
+    castingsList.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || !e.target.matches?.('.pp-inv-day-input')) return;
+        e.preventDefault();
+        let next = e.target.closest('.pp-inv-row')?.nextElementSibling;
+        while (next && !next.classList.contains('pp-inv-row')) next = next.nextElementSibling;
+        const target = next?.querySelector(`.pp-inv-day-input[data-inv-day="${e.target.dataset.invDay}"]`);
+        if (target) { target.focus(); target.select(); } else e.target.blur();
+    });
+    castingsList.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-inv-days-clear]');
+        const id = b?.closest('.pp-cast-card[data-casting-id]')?.getAttribute('data-casting-id');
+        if (id) handleInvDaysClear(id);
     });
     // Shift+click on a row's tick box: every row between the last plain tick and this one is ticked too (2026-10-29).
     castingsList.addEventListener('click', (e) => {
@@ -11259,38 +11749,99 @@ function isPristineBatchTicket(t) {
 function getBatchTicketList(castingId) {
     let arr = batchTickets.get(castingId);
     if (!arr) { arr = []; batchTickets.set(castingId, arr); }
-    const detected = getCastingComponentColorIds(castingId);
-    for (const id of detected) {
-        if (!arr.some(t => t.colorLogId === id)) {
-            const v = emptyBatchTicketForm(castingId);
-            v.colorLogId = id;
-            arr.push(v);
+    // Cast days (2026-11-20): a casting split over its cast days is batched day by day, one ticket per colour PER
+    // DAY. Not split = Day 1 only, exactly as before (a ticket left on a later day by an old split stays in the
+    // database but is not shown, printed or counted).
+    const info = btDays(castingId);
+    const dayNs = info ? info.dates.map((_, i) => i + 1) : [1];
+    const detectedOf = new Map();
+    for (const n of dayNs) {
+        const detected = info ? btDayColorIds(castingId, n) : getCastingComponentColorIds(castingId);
+        detectedOf.set(n, detected);
+        const newTicket = (colorLogId) => { const v = emptyBatchTicketForm(castingId); v.colorLogId = colorLogId; if (n > 1) v.castDay = n; arr.push(v); };
+        for (const id of detected) {
+            if (!arr.some(t => t.colorLogId === id && btDayOf(t) === n)) newTicket(id);
         }
-    }
-    // A pristine legacy placeholder from before colors were detected just clutters
-    // the pill row — drop it once real colors exist.
-    if (detected.length) {
-        const idx = arr.findIndex(t => !t.colorLogId && isPristineBatchTicket(t));
-        if (idx !== -1) arr.splice(idx, 1);
-    }
-    // A null-color ticket is not a valid state: it can't be pill-selected,
-    // can't render a batch plan, and would double-count in Mix Day Totals.
-    // If nothing color-tagged exists yet, seed an empty ticket on the project's
-    // default color log so the form has something real to bind to.
-    if (!arr.some(t => t.colorLogId) && currentColorLogs[0]?.id) {
-        const v = emptyBatchTicketForm(castingId);
-        v.colorLogId = currentColorLogs[0].id;
-        arr.push(v);
+        // A pristine legacy placeholder from before colors were detected just clutters
+        // the pill row — drop it once real colors exist.
+        if (detected.length) {
+            const idx = arr.findIndex(t => !t.colorLogId && btDayOf(t) === n && isPristineBatchTicket(t));
+            if (idx !== -1) arr.splice(idx, 1);
+        }
+        // A null-color ticket is not a valid state: it can't be pill-selected,
+        // can't render a batch plan, and would double-count in Mix Day Totals.
+        // If nothing color-tagged exists yet, seed an empty ticket on the project's
+        // default color log so the form has something real to bind to.
+        // (A later day of a split casting only gets one when pieces cast on it.)
+        const wanted = !info || n === 1 || info.totals[n - 1].pcs > 0;
+        if (wanted && !arr.some(t => t.colorLogId && btDayOf(t) === n) && currentColorLogs[0]?.id) newTicket(currentColorLogs[0].id);
     }
     if (!arr.length) arr.push(emptyBatchTicketForm(castingId));
     const rank = (t) => {
         if (!t.colorLogId) return -1;
+        const detected = detectedOf.get(btDayOf(t)) || [];
         const i = detected.indexOf(t.colorLogId);
         return i === -1 ? detected.length : i;
     };
     // Legacy null-color rows stay in `arr` (and in the DB) but never surface —
     // no pill, no plan, no contribution to totals.
-    return arr.slice().sort((a, b) => rank(a) - rank(b)).filter(t => t.colorLogId);
+    return arr.slice().sort((a, b) => (btDayOf(a) - btDayOf(b)) || (rank(a) - rank(b))).filter(t => t.colorLogId && dayNs.includes(btDayOf(t)));
+}
+
+// ---- Batching per cast day (2026-11-20) ----
+/** The split of a casting as batching sees it (invDayInfo), or null while it is not split over its cast days. */
+function btDays(castingId) {
+    const casting = currentCastings.find(c => c.id === castingId);
+    if (!casting || !currentCastingInventory.has(castingId)) return null;
+    const info = invDayInfo(casting, getInventoryFor(castingId));
+    return info && info.split ? info : null;
+}
+function btDayOf(t) { return t && parseInt(t.castDay, 10) > 1 ? parseInt(t.castDay, 10) : 1; }
+/** What a ticket is picked by: its colour, and its day once it is not Day 1 (so Day 1 keys are what they always were). */
+function btKey(t) { return (t.colorLogId || '') + (btDayOf(t) > 1 ? '@' + btDayOf(t) : ''); }
+/** The inventory rows a day's tickets are made from: the whole casting, or that day's share of a split one. */
+function btDayRows(castingId, day) {
+    const info = btDays(castingId);
+    const rows = getInventoryFor(castingId);
+    return info ? inventoryRowsOfDay(rows, info.cfg, info.nDays, day) : rows;
+}
+/** Colour logs of the pieces that cast on one day of a split casting (first-appearance order, loaded logs only). */
+function btDayColorIds(castingId, day) {
+    const ids = [];
+    for (const r of btDayRows(castingId, day)) {
+        if (!r.color_log_id || ids.includes(r.color_log_id)) continue;
+        if (getColorLogByIdSync(r.color_log_id)) ids.push(r.color_log_id);
+    }
+    return ids;
+}
+/**
+ * The ticket whose form is on screen. The form carries its ticket's key (colour + day): if the cast days changed
+ * under it (the schedule moved, the split was undone, a reload reset the pick), an edit must never fall through to
+ * another day's ticket. Found again by its key = carry on; gone = the form is redrawn and the edit is dropped.
+ */
+function btTicketOnScreen(castingId) {
+    const ticket = getBatchTicketFor(castingId);
+    const el = castingId === currentBatchCastingId ? document.querySelector('#pp-bt-content [data-bt-key]') : null;
+    if (!el || !ticket) return ticket;
+    const key = el.getAttribute('data-bt-key');
+    if (btKey(ticket) === key) return ticket;
+    const same = getBatchTicketList(castingId).find(t => btKey(t) === key);
+    if (same) { currentBatchColorSel.set(castingId, key); return same; }
+    renderBatchTicketsContent();
+    showToast('The cast days of this casting changed, so the ticket on screen was reloaded. Nothing was changed: check which day you are on and enter it again.', 'error', 8000);
+    return null;
+}
+/** The tickets that share a ticket's day (with several of them, each totals only its own colour's rows). */
+function btSameDayTickets(castingId, ticket) { return getBatchTicketList(castingId).filter(t => btDayOf(t) === btDayOf(ticket)); }
+/** "3", or "3 \u2014 DAY 2 OF 2" on a split casting: the Cast # line of the ticket. */
+function btCastLabel(casting, ticket) {
+    const info = btDays(casting.id);
+    return (casting.casting_number || '') + (info ? ` \u2014 DAY ${btDayOf(ticket)} OF ${info.nDays}` : '');
+}
+/** The ticket's cast date: the casting's own, or the weekly's date of that day on a split casting. */
+function btCastDate(casting, ticket) {
+    const info = btDays(casting.id);
+    return (info && info.dates[btDayOf(ticket) - 1]) || casting.casting_date || '';
 }
 
 // Active ticket for a casting: the one matching the color-pill selection.
@@ -11300,7 +11851,7 @@ function getBatchTicketFor(castingId) {
     const list = getBatchTicketList(castingId);
     if (list.length === 1) return list[0];
     const selKey = currentBatchColorSel.get(castingId);
-    const selected = list.find(t => (t.colorLogId || '') === selKey);
+    const selected = list.find(t => btKey(t) === selKey);
     return selected || list.find(t => t.colorLogId) || list[0];
 }
 
@@ -11370,7 +11921,12 @@ function printSpecialBatchingNow() {
     const build = getSpecialBatchingFrame()?.contentWindow?.jsbBuildPrintHtml;
     if (typeof build !== 'function') { showToast('The batching page is still loading — try again in a moment', 'error'); return true; }
     const html = build();
-    if (!html) { showToast('Enter Total Cu Ft to generate tickets', 'error'); return true; }
+    if (!html) {
+        let why = '';
+        try { why = getSpecialBatchingFrame()?.contentWindow?.jsbNothingToPrint?.() || ''; } catch (err) { /* an older copy of the page */ }
+        showToast(why || 'Enter Total Cu Ft to generate tickets', 'error', why ? 14000 : undefined);
+        return true;
+    }
     const w = window.open('', '_blank');
     if (!w) { showToast('Pop-up blocked — allow pop-ups for printing', 'error'); return true; }
     w.document.open();
@@ -11420,26 +11976,146 @@ async function ensureJigListsForScrim() {
 }
 /** The scrim line for a casting: face sq ft from the Casting Inventory × scrim layers from the Jig List cross-section. */
 /** Finishing & sealing products for the casting's finished face, off its colour logs' notes (2026-11-06). */
-function finishingLineHtml(casting, entries) {
+// 2026-11-24: products and rates are defined in the portal (one shared settings row, read on every opening of the
+// tab); the block's own buttons open the rate pop-up, and a saved rate redraws the totals.
+initFinishingEditor({ onChange: () => renderBatchTicketsContent(), toast: (msg, kind) => showToast(msg, kind, 5000) });
+function finishingLineHtml(casting, entries, day = null) {
     if (!casting) return '';
     const logs = [];
     for (const e of entries || []) if (e.log && !logs.some(l => l.id === e.log.id)) logs.push(e.log);
     if (!logs.length) return '';
-    const { face, partial } = faceSqFtOfInventory(getInventoryFor(casting.id));
-    // The Color Log's grout type + fill coat sit right under the finishing / sealing notes (2026-11-19)
-    return groutNotesHtml(logs) + finishingProductsHtml(logs, face, { partial });
+    const { face, partial } = faceSqFtOfInventory(day ? btDayRows(casting.id, day) : getInventoryFor(casting.id));
+    return finishingProductsHtml(logs, face, { partial });
 }
-function scrimLineHtml(casting) {
+function scrimLineHtml(casting, day = null) {
     if (!casting) return '';
-    const rows = getInventoryFor(casting.id);
+    const rows = day ? btDayRows(casting.id, day) : getInventoryFor(casting.id);
     if (!rows.length) return '';
     const { text, detail, warn } = scrimForInventory(rows, btJigLists.get(casting.id));
     if (!text) return '';
     return `<div class="pp-bt-totals-scrim${warn ? ' pp-bt-totals-scrim-warn' : ''}" title="${escapeAttr(detail || '')}">${escapeHtml(text)}</div>`;
 }
+// ---- Mix Day Totals: Day / Job switch (2026-11-24) ----
+// user: "set up the batching mix day totals to toggle between day and job". Day = the casting on screen, as always.
+// Job = every casting of the job that has a batch ticket, added up (materials, finishing products, scrim); a casting
+// with no ticket yet is not guessed, it is named as not counted. A job with phases gets a Phase step in between,
+// because its castings repeat their numbers per phase. Kept while the job stays open; another job starts on Day.
+// ---- Job batching rules (2026-11-25): the job's own batch sizes, face thickness, back-up layers, pigment reduction,
+// back-up ADVA, Cowbay and aggregate, typed in the Job Batching panel at the top of this tab (services/batch-rules.js).
+// null = typical batching: everything below plans and prints exactly as it always has.
+let currentBatchRules = null;
+let batchRulesFor = null;            // project number the rules were read for
+let batchRulesSaveTimer = null;
+function btRules() { return batchRulesFor === currentProjectNumber ? currentBatchRules : null; }
+function btSizing() { return rulesSizing(btRules()); }
+/** The back-up pigment reduction a ticket is batched with: the job-wide value when the job sets one, else the ticket's own. */
+function btPigPct(ticket) { const job = rulesPigReduction(btRules()); return job != null ? job : parsePigReduction(ticket?.pigReduction); }
+async function ensureBatchRules(force = false) {
+    const pn = currentProjectNumber;
+    if (!pn || getSpecialBatching(pn)) { currentBatchRules = null; batchRulesFor = pn; return; }
+    if (batchRulesSaveTimer || (!force && batchRulesFor === pn)) return;   // a change of ours is still on its way to the database
+    try {
+        const rules = await loadBatchRules(pn, { strict: true });
+        if (pn !== currentProjectNumber || batchRulesSaveTimer) return;
+        currentBatchRules = rules; batchRulesFor = pn;
+    } catch (err) {
+        logger.error('[batch-rules] load failed', err);
+        if (pn === currentProjectNumber && batchRulesFor !== pn) showToast('The Job Batching settings could not be read just now. If this job has special batching, the tickets below are NOT right: reload the page before printing.', 'error', 15000);
+    }
+}
+function renderBatchRulesPanel() {
+    const slump = document.getElementById('pp-bt-slump-targets');
+    if (!slump) return;
+    let el = document.getElementById('pp-bt-rules');
+    if (!el) { el = document.createElement('div'); el.id = 'pp-bt-rules'; slump.insertAdjacentElement('afterend', el); }
+    el.hidden = false;
+    if (el.contains(document.activeElement) && el.dataset.btrFor === String(currentProjectNumber)) return;   // someone is typing in it
+    el.dataset.btrFor = String(currentProjectNumber);
+    drawBatchRulesPanel(el, btRules(), handleBatchRulesChange);
+}
+function handleBatchRulesChange(next) {
+    const pn = currentProjectNumber;
+    if (!pn) return;
+    currentBatchRules = next; batchRulesFor = pn;
+    renderBatchTickets();
+    updateFloats();
+    const el = document.getElementById('pp-bt-rules');
+    setBatchRulesStatus(el, 'Saving\u2026');
+    if (batchRulesSaveTimer) clearTimeout(batchRulesSaveTimer);
+    batchRulesSaveTimer = setTimeout(async () => {
+        batchRulesSaveTimer = null;
+        try {
+            await saveBatchRules(pn, next);
+            if (pn === currentProjectNumber) setBatchRulesStatus(el, 'Saved');
+        } catch (err) {
+            logger.error('[batch-rules] save failed', err);
+            if (pn === currentProjectNumber) setBatchRulesStatus(el, 'NOT saved', true);
+            showToast('The Job Batching change could not be saved. It shows here but will be gone after a reload.', 'error', 10000);
+        }
+    }, 500);
+    // Tickets already printed for this job were made with the old settings: say which castings.
+    if (msOn()) {
+        const printed = currentCastings.filter(c => { const r = msRow(c.id, 'Batching Sheets'); return r && (r.status === MS.GREEN || r.status === MS.ORANGE); }).map(c => c.casting_number || '?');
+        if (printed.length) showToast(`Job batching changed. Batch tickets were already printed for ${printed.length === 1 ? 'cast' : 'casts'} ${printed.slice(0, 12).join(', ')}${printed.length > 12 ? ' and more' : ''}: check them and print again where the batches changed.`, 'warning', 14000);
+    }
+}
+function updateRulesFloat() {
+    const show = currentTab === 'batch-tickets' && !formViewHidden() && !!currentProjectNumber && !getSpecialBatching(currentProjectNumber);
+    updateBatchRulesFloat(show ? btRules() : null, show, () => document.getElementById('pp-bt-rules')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+}
+
+let btTotalsScope = 'day';
+const btPhased = () => !!currentPhasesEnabled && currentPhases.length > 1;
+function btTotalsScopeNow() {
+    if (btTotalsScope === 'phase') return btPhased() ? 'phase' : 'job';
+    return btTotalsScope === 'job' ? 'job' : 'day';
+}
+function btTotalsToggleHtml() {
+    const now = btTotalsScopeNow();
+    const opts = [['day', 'Day', 'The mix day on screen: this casting']];
+    if (btPhased()) opts.push(['phase', 'Phase', 'Every batched casting of the phase on screen, added up']);
+    opts.push(['job', 'Job', btPhased() ? 'Every batched casting of the job, all phases, added up' : 'Every batched casting of the job, added up']);
+    return `<span class="pp-bt-scope" role="group" aria-label="What the totals add up">${opts.map(([k, label, tip]) =>
+        `<button type="button" class="pp-bt-scope-btn${k === now ? ' is-on' : ''}" data-bt-totals-scope="${k}" title="${escapeAttr(tip)}" aria-pressed="${k === now}">${label}</button>`).join('')}</span>`;
+}
+/** The totals box under the batch plan: the casting on screen (Day), or the phase / job added up. */
+function btTotalsPanelHtml(casting) {
+    const scope = btTotalsScopeNow();
+    const headHtml = btTotalsToggleHtml();
+    if (scope === 'day') {
+        // Mix Day Totals are for the WHOLE casting: every color ticket of every cast day combined (user, 2026-11-20).
+        const entries = buildBatchTotalsEntries(casting);
+        return renderBatchTotals(entries, casting, { scrimHtml: scrimLineHtml(casting), finishingHtml: finishingLineHtml(casting, entries), headHtml });
+    }
+    const list = scope === 'phase' ? getCastingsForActivePhase() : currentCastings;
+    const phaseName = (id) => currentPhases.find(ph => ph.id === id)?.phase_name || '';
+    const nameOf = (c) => (scope === 'job' && btPhased() && phaseName(c.phase_id) ? phaseName(c.phase_id) + ' · ' : '') + (c.casting_number || '?');
+    const groups = list.map(c => ({ casting: c, name: nameOf(c), entries: buildBatchTotalsEntries(c) }));
+    const counted = groups.filter(g => g.entries.length);
+    const skipped = groups.filter(g => !g.entries.length);
+    const what = scope === 'phase' ? 'the phase' : 'the job';
+    const howMany = skipped.length ? `${counted.length} of ${groups.length}` : `all ${groups.length}`;
+    const title = (scope === 'phase' ? `Phase Totals — ${phaseName(currentPhaseId) || 'this phase'}` : 'Job Totals') + ` — ${howMany} ${groups.length === 1 ? 'casting' : 'castings'}`;
+    const names = skipped.slice(0, 15).map(g => g.name).join(', ') + (skipped.length > 15 ? ` and ${skipped.length - 15} more` : '');
+    const noteHtml = `<div class="pp-bt-totals-scope-note">Adds up the batch tickets of <b>${howMany}</b> ${groups.length === 1 ? 'casting' : 'castings'} of ${what}.`
+        + (skipped.length ? ` <span class="pp-bt-totals-scope-skip">No batch ticket yet, not counted: ${escapeHtml(names)}.</span>` : '') + '</div>';
+    // finishing & sealing products: each casting's own colour logs for its own finished face, added up
+    const fin = counted.map(g => {
+        const logs = [];
+        for (const e of g.entries) if (e.log && !logs.some(l => l.id === e.log.id)) logs.push(e.log);
+        return { logs, ...faceSqFtOfInventory(getInventoryFor(g.casting.id)) };
+    });
+    const allLogs = [];
+    for (const g of fin) for (const l of g.logs) if (!allLogs.some(x => x.id === l.id)) allLogs.push(l);
+    const finishingHtml = finishingProductsHtml(allLogs, fin.reduce((sum, g) => sum + g.face, 0), { partial: fin.some(g => g.partial), groups: fin, scope, count: counted.length });
+    const sc = scrimForCastings(counted.map(g => ({ name: g.name, rows: getInventoryFor(g.casting.id), data: btJigLists.get(g.casting.id) })), what);
+    const scrimHtml = sc.text ? `<div class="pp-bt-totals-scrim${sc.warn ? ' pp-bt-totals-scrim-warn' : ''}" title="${escapeAttr(sc.detail || '')}">${escapeHtml(sc.text)}</div>` : '';
+    return renderBatchTotals(counted.flatMap(g => g.entries), casting, { scrimHtml, finishingHtml, headHtml, title, noteHtml });
+}
 async function activateBatchTicketsTab() {
     if (currentProjectNumber) syncCastDatesWithWeekly();   // runs alongside; redraws when the weekly answers
-    await ensureJigListsForScrim();
+    await Promise.all([ensureJigListsForScrim(), loadFinishingDefs(), ensureBatchRules(true)]);   // the job's rules are read again on every visit
+    { const rulesEl = document.getElementById('pp-bt-rules'); if (rulesEl) rulesEl.hidden = true; }   // shown on the success path only
     const needsSave    = document.getElementById('pp-bt-needs-save');
     const needsCL      = document.getElementById('pp-bt-needs-color-log');
     const noCastings   = document.getElementById('pp-bt-no-castings');
@@ -11502,7 +12178,6 @@ async function activateBatchTicketsTab() {
             const ids = currentCastings.map(c => c.id);
             const map = await loadBatchTicketsForCastings(ids);
             batchTickets.clear();
-            currentBatchColorSel.clear();
             for (const c of currentCastings) {
                 batchTickets.set(c.id, map.get(c.id) || []);
             }
@@ -11517,6 +12192,8 @@ async function activateBatchTicketsTab() {
     if (!currentBatchCastingId || !phaseScoped.some(c => c.id === currentBatchCastingId)) {
         currentBatchCastingId = phaseScoped[0]?.id || null;
     }
+    // Cast days (2026-11-20): castings split over their cast days are batched day by day.
+    if (!(await ensureCastDays()) && [...batchTickets.values()].some(arr => (arr || []).some(t => btDayOf(t) > 1))) showToast('The cast days could not be read from the weekly just now. A casting that is split over its cast days shows as ONE ticket set until this tab is opened again: do not import or print it now.', 'error', 10000);
 
     // Reveal + populate the project-wide slump targets now that tickets will render.
     if (slumpPanel) {
@@ -11528,6 +12205,7 @@ async function activateBatchTicketsTab() {
         if (fFinal) fFinal.value = currentSlumpTargets.finalBackUp;
         slumpPanel.hidden = false;
     }
+    renderBatchRulesPanel();
 
     renderBatchTickets();
 }
@@ -11552,8 +12230,8 @@ function renderBatchTicketsPills() {
 // ---------- Is the ticket still in step with the Casting Inventory? ----------
 /** Inventory totals exactly as Import from Tracking computes them (value × (quantity + extras)), for this ticket's rows. */
 function batchInventoryTotals(castingId, ticket) {
-    let rows = getInventoryFor(castingId);
-    if (getBatchTicketList(castingId).length > 1) {
+    let rows = btDayRows(castingId, btDayOf(ticket));
+    if (btSameDayTickets(castingId, ticket).length > 1) {
         rows = rows.filter(r => ticket.colorLogId ? r.color_log_id === ticket.colorLogId : !r.color_log_id);
     }
     if (!rows.length) return null;
@@ -11565,6 +12243,16 @@ function batchInventoryTotals(castingId, ticket) {
         ff += (Number(r.ff_sq_ft) || 0) * units;
     }
     return { cuFt: roundSig(cuFt, 2), ff: roundSig(ff, 2), cuFtComplete: rows.every(r => has(r.cu_ft)), ffComplete: rows.every(r => has(r.ff_sq_ft)) };
+}
+
+/** A batched ticket nothing is cast in any more (left over): flagged red, never printed, never totalled, so it
+ *  cannot turn Batching Sheets green. Split casting: nothing of its colour casts on its day (2026-11-20).
+ *  Any casting (2026-11-24): its colour is on none of the pieces, they were given another colour after it was made. */
+function btLeftOver(castingId, ticket) {
+    if (!ticket || String(ticket.cuFt ?? '').trim() === '') return false;
+    if (btDays(castingId) && !batchInventoryTotals(castingId, ticket)) return true;
+    if (currentCastingInventoryLoadedFor !== currentProjectNumber) return false;      // nothing to judge by yet
+    return leftOverTicket(ticket, btDayRows(castingId, btDayOf(ticket)));
 }
 
 let batchInventoryLoading = false;
@@ -11587,6 +12275,18 @@ function renderBatchStaleBanner(casting, ticket) {
         return '';
     }
     const t = batchInventoryTotals(casting.id, ticket);
+    if (!btDays(casting.id) && btLeftOver(casting.id, ticket)) {
+        return `<div class="pp-bt-stale" role="alert">
+            <div class="pp-bt-stale-title">&#9888; NOTHING IN THIS CASTING IS THIS COLOR ANY MORE</div>
+            <div class="pp-bt-stale-text">This ticket was made for pieces that have since been given another color (Casting Inventory, Color column). It is left over: it is <b>not printed</b> and not counted in the totals, so it cannot turn Batching Sheets green. Batch the casting in the color its pieces have now, then remove this ticket with the &times; on its pill &mdash; or set the pieces back to this color.</div>
+        </div>`;
+    }
+    if (btDays(casting.id) && btLeftOver(casting.id, ticket)) {
+        return `<div class="pp-bt-stale" role="alert">
+            <div class="pp-bt-stale-title">&#9888; NOTHING OF THIS COLOR CASTS ON DAY ${btDayOf(ticket)} ANY MORE</div>
+            <div class="pp-bt-stale-text">This ticket was made for pieces that have since been moved to another cast day (Casting Inventory, Day columns). It is left over: it is <b>not printed</b>. Remove it with the &times; on its pill, or move the pieces back to Day ${btDayOf(ticket)}.</div>
+        </div>`;
+    }
     if (!t) return '';
     const differs = (val, now, complete) => complete && val !== null && val !== undefined && String(val).trim() !== ''
         && roundSig(parseFloat(val) || 0, 2) !== now;
@@ -11632,7 +12332,7 @@ function btPlanSignature(casting, ticket, cuFt, faceSqFt) {
     const activeLog = getActiveBatchColorLog(casting, ticket);
     const sandLbs = getColorLogSandLbs(activeLog);
     if (!sandLbs) return 'none';
-    const plan = buildBatchPlan({
+    const plan = buildBatchPlan({ sizing: btSizing(),
         totalCuFt,
         faceSqFt: parseFloat(faceSqFt) || 0,
         cuFtPer250: parseFloat(ticket.cuFtPer250) || 4.28,
@@ -11640,7 +12340,9 @@ function btPlanSignature(casting, ticket, cuFt, faceSqFt) {
         colorLogSandLbs: sandLbs,
         manualOverrides: btOverrides(ticket)
     });
-    return JSON.stringify([Math.round((plan.faceCuFt || 0) * 1000) / 1000, plan.batches.map(b => [b.batchSandLbs, b.type, Math.round(b.cuFt * 1000) / 1000])]);
+    // The batches only (2026-11-24): the face cu ft behind them is not compared - a Face Sq Ft change that leaves
+    // every batch as printed is no reprint (0383 T7, direct cast: 8 batches unchanged, yet the board stayed orange).
+    return JSON.stringify(plan.batches.map(b => [b.batchSandLbs, b.type, Math.round(b.cuFt * 1000) / 1000]));
 }
 /** One ticket: would it print the same batches from the inventory as it is now? */
 function btTicketSameAsInventory(casting, ticket, totals) {
@@ -11654,6 +12356,7 @@ function btReprintCheck(castingId) {
     let seen = false;
     for (const ticket of getBatchTicketList(castingId)) {
         if (ticket.cuFt === null || ticket.cuFt === undefined || String(ticket.cuFt).trim() === '') continue;
+        if (btLeftOver(castingId, ticket)) continue;   // left over: it is never printed, so it decides nothing (2026-11-24)
         const t = batchInventoryTotals(castingId, ticket);
         if (!t) return 'changed';   // this ticket's colour has no inventory rows any more
         if (!t.cuFtComplete || !t.ffComplete) return 'none';
@@ -11663,10 +12366,10 @@ function btReprintCheck(castingId) {
     return seen ? 'same' : 'none';
 }
 async function ensureBatchTicketsLoaded() {
+    await ensureBatchRules();   // whoever compares or prints tickets plans them with the job's own batching rules
     if (batchTicketsLoadedFor === currentProjectNumber) return;
     const map = await loadBatchTicketsForCastings(currentCastings.map(c => c.id));
     batchTickets.clear();
-    currentBatchColorSel.clear();
     for (const c of currentCastings) batchTickets.set(c.id, map.get(c.id) || []);
     batchTicketsLoadedFor = currentProjectNumber;
 }
@@ -11698,7 +12401,7 @@ function batchQuickInfo() {
     if (!casting) return null;
     const ticket = getBatchTicketFor(casting.id);
     const log = getActiveBatchColorLog(casting, ticket);
-    return { cast: casting.casting_number || '', castDate: casting.casting_date || '', cuFt: ticket?.cuFt ?? '', faceSqFt: ticket?.faceSqFt ?? '', color: log?.name || '' };
+    return { cast: ticket ? btCastLabel(casting, ticket) : (casting.casting_number || ''), castDate: ticket ? btCastDate(casting, ticket) : (casting.casting_date || ''), cuFt: ticket?.cuFt ?? '', faceSqFt: ticket?.faceSqFt ?? '', color: log?.name || '' };
 }
 function quickInfoHtml(info) {
     if (!info) return '';
@@ -11733,7 +12436,7 @@ function castsAnchor() {
     const list = casting ? getBatchTicketList(casting.id) : [];
     const activeTicket = casting ? getBatchTicketFor(casting.id) : null;
     const colors = list.length > 1
-        ? list.map(t => ({ key: t.colorLogId || '', label: batchTicketColorLabel(t), active: t === activeTicket }))
+        ? list.map(t => ({ key: btKey(t), label: batchTicketPillLabel(t), active: t === activeTicket }))
         : [];
     return { bottom: pills.getBoundingClientRect().bottom, casts, colors, source: 'tab' };
 }
@@ -11773,7 +12476,7 @@ function updateCastsFloat() {
     castsFloatEl.hidden = false;
     syncFloatShift();
 }
-function updateFloats() { updateStaleFloat(); updateCastsFloat(); updateMsFloat(); }
+function updateFloats() { updateStaleFloat(); updateCastsFloat(); updateMsFloat(); updateRulesFloat(); }
 
 /** Where the inline warning sits on screen (and what it says), or null when none is showing. */
 function formViewHidden() { const fv = document.getElementById('pp-form-view'); return !fv || fv.hidden; }
@@ -11854,10 +12557,10 @@ function renderBatchTicketsContent() {
     // single ticket when more color tickets could be added — the "+ Color"
     // select is the only way to split an untagged/one-color casting manually.
     const canAddColor = currentMultiColorEnabled
-        && currentColorLogs.some(l => !list.some(t => t.colorLogId === l.id));
+        && currentColorLogs.some(l => !list.some(t => t.colorLogId === l.id && btDayOf(t) === btDayOf(ticket)));
     const showColorPills = list.length > 1 || canAddColor;
     const colorPills = showColorPills ? renderBatchColorPills(list, ticket) : '';
-    content.innerHTML = `<div data-casting-id="${escapeAttr(casting.id)}">${colorPills}${renderBatchTicketBody(casting, ticket, showColorPills)}</div>`;
+    content.innerHTML = `<div data-casting-id="${escapeAttr(casting.id)}" data-bt-key="${escapeAttr(btKey(ticket))}">${colorPills}${renderBatchTicketBody(casting, ticket, showColorPills)}</div>`;
     updateFloats();
 }
 
@@ -11865,6 +12568,13 @@ function renderBatchTicketsContent() {
 function batchTicketColorLabel(ticket) {
     if (!ticket.colorLogId) return 'No Color';
     return getColorLogByIdSync(ticket.colorLogId)?.name || '(unnamed)';
+}
+/** Pill text: the colour, with its cast day in front on a casting split over its cast days ("Day 2 \u00b7 Dec 4 \u00b7 Buff"). */
+function batchTicketPillLabel(ticket) {
+    const info = btDays(ticket.castingId || currentBatchCastingId);
+    if (!info) return batchTicketColorLabel(ticket);
+    const n = btDayOf(ticket);
+    return `Day ${n} \u00b7 ${shortDay(info.dates[n - 1])} \u00b7 ${batchTicketColorLabel(ticket)}`;
 }
 
 // Second pill row (under the casting pills) — one pill per color ticket, plus
@@ -11875,11 +12585,12 @@ function renderBatchColorPills(list, activeTicket) {
         const remove = isActive && list.length > 1
             ? `<span class="pp-bt-color-pill-x" data-bt-color-remove title="Remove this color ticket">&times;</span>`
             : '';
-        return `<button type="button" class="pp-bt-pill pp-bt-color-pill${isActive ? ' pp-bt-pill-active' : ''}" data-bt-color-pill data-color-key="${escapeAttr(t.colorLogId || '')}">${escapeHtml(batchTicketColorLabel(t))}${remove}</button>`;
+        const lo = btLeftOver(t.castingId || currentBatchCastingId, t);      // left over: never printed (2026-11-24)
+        return `<button type="button" class="pp-bt-pill pp-bt-color-pill${isActive ? ' pp-bt-pill-active' : ''}${lo ? ' pp-bt-pill-leftover' : ''}" data-bt-color-pill data-color-key="${escapeAttr(btKey(t))}"${lo ? ' title="Left over: nothing is cast in this color any more. Not printed."' : ''}>${lo ? '&#9888; ' : ''}${escapeHtml(batchTicketPillLabel(t))}${remove}</button>`;
     }).join('');
     let addSel = '';
     if (currentMultiColorEnabled) {
-        const usedIds = new Set(list.map(t => t.colorLogId).filter(Boolean));
+        const usedIds = new Set(list.filter(t => btDayOf(t) === btDayOf(activeTicket)).map(t => t.colorLogId).filter(Boolean));
         const avail = currentColorLogs.filter(l => !usedIds.has(l.id));
         if (avail.length) {
             addSel = `<select class="pp-bt-color-add" data-bt-color-add title="Add a batch ticket for another color log">
@@ -11920,15 +12631,20 @@ function renderBatchTicketBody(casting, ticket, multi = false) {
         <div class="pp-bt-form">
             <div class="pp-bt-context">
                 <div class="pp-bt-context-cast">
-                    <span class="pp-bt-context-cast-label">Casting</span>${escapeHtml(casting.casting_number || '')}
+                    <span class="pp-bt-context-cast-label">Casting</span>${escapeHtml(casting.casting_number || '')}${btDays(casting.id) ? `<span class="pp-bt-context-day" title="This casting is split over its cast days (Casting Inventory, Day columns): each day has its own batch tickets, made from that day's pieces.">DAY ${btDayOf(ticket)} OF ${btDays(casting.id).nDays}</span>` : ''}
                 </div>
                 <span class="pp-bt-save-status" data-bt-status></span>
                 ${colorLogPicker}
-                <div class="pp-bt-context-date-group">
+                ${btDays(casting.id)
+                    ? `<div class="pp-bt-context-date-group">
+                    <span class="pp-bt-context-date-label">Cast Date</span>
+                    <span class="pp-bt-context-colorlog-static" title="The date of this cast day, from the weekly">${escapeHtml(castDayLong(btCastDate(casting, ticket)))}</span>
+                </div>`
+                    : `<div class="pp-bt-context-date-group">
                     <label class="pp-bt-context-date-label" for="pp-bt-castdate-${escapeAttr(casting.id)}">Cast Date</label>
                     <input type="date" id="pp-bt-castdate-${escapeAttr(casting.id)}" class="pp-bt-context-date" data-bt-casting-date value="${escapeAttr(casting.casting_date || '')}">
                     ${weeklyDateHintHtml(casting)}
-                </div>
+                </div>`}
             </div>
 
             <div data-bt-stale-wrap>${renderBatchUpdatingBanner(casting)}${renderBatchStaleBanner(casting, ticket)}</div>
@@ -11955,13 +12671,13 @@ function renderBatchTicketBody(casting, ticket, multi = false) {
                 <div class="pp-bt-field pp-bt-pigreduce">
                     <label class="pp-bt-field-label">Back Up Pigment Reduction (%)</label>
                     <div class="pp-bt-pigreduce-row">
-                        <input type="number" step="1" min="0" max="100" class="pp-bt-input pp-bt-pigreduce-input" data-bt-field="pigReduction" value="${escapeAttr(ticket.pigReduction)}" placeholder="50">
+                        <input type="number" step="1" min="0" max="100" class="pp-bt-input pp-bt-pigreduce-input" data-bt-field="pigReduction" value="${escapeAttr(rulesPigReduction(btRules()) != null ? String(rulesPigReduction(btRules())) : ticket.pigReduction)}" placeholder="50"${rulesPigReduction(btRules()) != null ? ' disabled title="Set for the whole job under Job Batching, at the top of this tab"' : ''}>
                         <label class="pp-bt-checkbox">
                             <input type="checkbox" data-bt-field="pigReduceFirstBackup"${ticket.pigReduceFirstBackup ? ' checked' : ''}>
                             Also reduce First Back Up
                         </label>
                     </div>
-                    <span class="pp-bt-field-hint">Always applied to FINAL Back Up. Check the box to also reduce First Back Up.</span>
+                    <span class="pp-bt-field-hint">${rulesPigReduction(btRules()) != null ? '<strong>Set for the whole job under Job Batching</strong> (top of this tab). ' : ''}Always applied to FINAL Back Up. Check the box to also reduce First Back Up.</span>
                 </div>
                 <details class="pp-bt-advanced"${(ticket.omitAggFinalBackup || ticket.omitFibersFace || ticket.cowbayFinalBackup) ? ' open' : ''}>
                     <summary>Direct Cast Options</summary>
@@ -12031,7 +12747,7 @@ function renderBatchPreview(casting, ticket) {
         return `<div class="pp-bt-no-color-log">No sand weight in this project's color log base ingredients. Add a sand entry to the color log to enable scaling.</div>`;
     }
 
-    const plan = buildBatchPlan({
+    const plan = buildBatchPlan({ sizing: btSizing(),
         totalCuFt,
         faceSqFt: parseFloat(ticket.faceSqFt) || 0,
         cuFtPer250: parseFloat(ticket.cuFtPer250) || 4.28,
@@ -12044,9 +12760,9 @@ function renderBatchPreview(casting, ticket) {
 
     const sectionHeader = renderBatchSectionHeader(plan);
     const assign = renderBatchAssignTable(plan);
-    // Day totals combine every color ticket on this casting, not just the one being viewed.
-    const totalsEntries = buildBatchTotalsEntries(casting);
-    const totalsPanel = renderBatchTotals(totalsEntries, casting, { scrimHtml: scrimLineHtml(casting), finishingHtml: finishingLineHtml(casting, totalsEntries) });
+    // Day totals combine every color ticket on this casting, not just the one being viewed; the box's Day / Job
+    // switch (2026-11-24) adds up the phase or the whole job instead.
+    const totalsPanel = btTotalsPanelHtml(casting);
     const tickets = renderBatchTicketCards(casting, ticket, plan);
 
     return `
@@ -12063,15 +12779,18 @@ function renderBatchPreview(casting, ticket) {
  * (cu ft entered and a color log with a sand weight). Feeds renderBatchTotals
  * so the Mix Day Totals panel spans all colors, not just the active ticket.
  */
-function buildBatchTotalsEntries(casting) {
+function buildBatchTotalsEntries(casting, day = null) {
     const entries = [];
     for (const t of getBatchTicketList(casting.id)) {
+        if (day && btDayOf(t) !== day) continue;
+        // split casting: a ticket left over on a day none of its color casts on any more is not printed, so not totalled
+        if (btLeftOver(casting.id, t)) continue;       // and (2026-11-24) a ticket in a colour no piece has any more
         const totalCuFt = parseFloat(t.cuFt);
         if (!totalCuFt || totalCuFt <= 0) continue;
         const log = getActiveBatchColorLog(casting, t);
         const sandLbs = getColorLogSandLbs(log);
         if (!sandLbs) continue;
-        const plan = buildBatchPlan({
+        const plan = buildBatchPlan({ sizing: btSizing(),
             totalCuFt,
             faceSqFt: parseFloat(t.faceSqFt) || 0,
             cuFtPer250: parseFloat(t.cuFtPer250) || 4.28,
@@ -12083,11 +12802,12 @@ function buildBatchTotalsEntries(casting) {
         entries.push({
             plan,
             log,
-            pigReductionPct: parsePigReduction(t.pigReduction),
+            pigReductionPct: btPigPct(t),
             reduceFirstBackup: !!t.pigReduceFirstBackup,
             omitAggFinalBackup: !!t.omitAggFinalBackup,
             omitFibersFace: !!t.omitFibersFace,
-            cowbayFinalBackup: !!t.cowbayFinalBackup
+            cowbayFinalBackup: !!t.cowbayFinalBackup,
+            rules: btRules()
         });
     }
     return entries;
@@ -12095,10 +12815,10 @@ function buildBatchTotalsEntries(casting) {
 
 function renderBatchSectionHeader(plan) {
     const { summary } = plan;
-    const parts = [];
-    if (summary.count250) parts.push(`${summary.count250} × 250 lb`);
-    if (summary.count150) parts.push(`${summary.count150} × 150 lb`);
-    if (summary.count100) parts.push(`${summary.count100} × 100 lb`);
+    // every batch size in the plan, largest first (a job's own sizes included, 2026-11-25)
+    const bySize = new Map();
+    for (const b of plan.batches) bySize.set(b.batchSandLbs, (bySize.get(b.batchSandLbs) || 0) + 1);
+    const parts = [...bySize].sort((a, b) => b[0] - a[0]).map(([lbs, n]) => `${n} × ${lbs} lb`);
     return `
         <div class="pp-bt-section-header">
             <span class="pp-bt-section-header-title">Generated Batches</span>
@@ -12163,10 +12883,10 @@ function renderBatchTicketCards(casting, ticket, plan) {
     const projectName = document.getElementById('pp-f-project_name')?.value || '';
     const sampleName = activeLog?.name || '';
     const castMethod = activeLog?.castMethod || '';
-    const castNumber = casting.casting_number || '';
-    const castDate = casting.casting_date || '';
+    const castNumber = btCastLabel(casting, ticket);
+    const castDate = btCastDate(casting, ticket);
 
-    const pigReductionPct = parsePigReduction(ticket.pigReduction);
+    const pigReductionPct = btPigPct(ticket);
     const reduceFirstBackup = !!ticket.pigReduceFirstBackup;
     const omitAggFinalBackup = !!ticket.omitAggFinalBackup;
     const omitFibersFace = !!ticket.omitFibersFace;
@@ -12190,7 +12910,7 @@ function renderBatchTicketCards(casting, ticket, plan) {
             omitFibersFace,
             cowbayFinalBackup,
             // Project-wide slump target for this batch's type (in inches).
-            targetSlump: clampSlumpTarget(currentSlumpTargets[b.type])
+            rules: btRules(), targetSlump: clampSlumpTarget(currentSlumpTargets[b.type])
         })
     ).join('');
 }
@@ -12263,7 +12983,11 @@ async function saveBatchTicketNow(castingId, ticket) {
     } catch (err) {
         logger.error('[batch-tickets] save failed', err);
         setBatchTicketStatus(castingId, 'error');
-        if (err?.code === '23505') {
+        if (btDayOf(ticket) > 1 && err?.code === '23505' && /casting_color_day_key/i.test(String(err?.message || '') + String(err?.details || ''))) {
+            alert(`Someone else created the Day ${btDayOf(ticket)} ticket for this color a moment ago, so yours was not saved.\n\nOpen the Batch Tickets tab again to see theirs.`);
+        } else if (btDayOf(ticket) > 1 && (err?.code === '23505' || err?.code === 'PGRST204' || err?.code === '42703' || /cast_day/i.test(String(err?.message || '')))) {
+            alert(`The Day ${btDayOf(ticket)} batch ticket could not be saved: the database has not been updated for batch tickets per cast day yet.\n\nRun migration/batch-tickets-cast-day.sql in the Supabase SQL editor (tell Sergejs), then change the ticket again.`);
+        } else if (err?.code === '23505') {
             alert('Batch ticket save failed: the database still allows only one ticket per casting.\n\nRun migration/batch-tickets-multi-color.sql in the Supabase SQL editor to enable multi-color batch tickets.');
         }
     }
@@ -12314,12 +13038,14 @@ function handleAddBatchColorTicket(colorLogId) {
     if (!castingId || !colorLogId) return;
     let arr = batchTickets.get(castingId);
     if (!arr) { arr = []; batchTickets.set(castingId, arr); }
-    if (!arr.some(t => t.colorLogId === colorLogId)) {
+    const day = btDayOf(getBatchTicketFor(castingId));          // the new colour ticket is for the day on screen
+    if (!arr.some(t => t.colorLogId === colorLogId && btDayOf(t) === day)) {
         const v = emptyBatchTicketForm(castingId);
         v.colorLogId = colorLogId;
+        if (day > 1) v.castDay = day;
         arr.push(v);
     }
-    currentBatchColorSel.set(castingId, colorLogId);
+    currentBatchColorSel.set(castingId, colorLogId + (day > 1 ? '@' + day : ''));
     renderBatchTicketsContent();
 }
 
@@ -12349,9 +13075,10 @@ async function handleRemoveBatchColorTicket() {
 }
 
 function handleBatchFieldInput(castingId, field, value) {
-    const ticket = getBatchTicketFor(castingId);
-    if (!(field in ticket)) return;
+    const ticket = btTicketOnScreen(castingId);
+    if (!ticket || !(field in ticket)) return;
     ticket[field] = value;
+    if (field === 'colorLogId') document.querySelector('#pp-bt-content [data-bt-key]')?.setAttribute('data-bt-key', btKey(ticket));   // the form still names its ticket
     // Inputs that affect the visible preview: re-render it so summary/tickets stay in sync.
     const previewAffectingFields = ['cuFt', 'faceSqFt', 'cuFtPer250', 'pigReduction', 'pigReduceFirstBackup', 'omitAggFinalBackup', 'omitFibersFace', 'cowbayFinalBackup', 'batchedBy', 'notes', 'colorLogId'];
     if (previewAffectingFields.includes(field)) {
@@ -12360,7 +13087,7 @@ function handleBatchFieldInput(castingId, field, value) {
         const activeLog = getActiveBatchColorLog(casting, ticket);
         const sandLbs = getColorLogSandLbs(activeLog);
         if (sandLbs && btOverrides(ticket).length) {
-            const newPlan = buildBatchPlan({
+            const newPlan = buildBatchPlan({ sizing: btSizing(),
                 totalCuFt: parseFloat(ticket.cuFt) || 0,
                 faceSqFt: parseFloat(ticket.faceSqFt) || 0,
                 cuFtPer250: parseFloat(ticket.cuFtPer250) || 4.28,
@@ -12384,12 +13111,13 @@ function handleBatchFieldInput(castingId, field, value) {
 }
 
 function handleBatchAssignChange(castingId, idx, type) {
-    const ticket = getBatchTicketFor(castingId);
+    const ticket = btTicketOnScreen(castingId);
+    if (!ticket) return;
     const casting = currentCastings.find(c => c.id === castingId);
     const activeLog = getActiveBatchColorLog(casting, ticket);
     const sandLbs = getColorLogSandLbs(activeLog);
     if (!sandLbs) return;
-    const plan = buildBatchPlan({
+    const plan = buildBatchPlan({ sizing: btSizing(),
         totalCuFt: parseFloat(ticket.cuFt) || 0,
         faceSqFt: parseFloat(ticket.faceSqFt) || 0,
         cuFtPer250: parseFloat(ticket.cuFtPer250) || 4.28,
@@ -12427,17 +13155,25 @@ async function handleImportBatchFromTracking(castingId) {
         }
     }
 
-    let rows = getInventoryFor(castingId);
+    let daysKnown = false;
+    try { daysKnown = await ensureCastDays(); } catch (e) { /* handled below */ }
+    if (!daysKnown && (batchTickets.get(castingId) || []).some(t => btDayOf(t) > 1)) {
+        showToast('Import stopped: this casting has batch tickets per cast day, and the cast days could not be read from the weekly just now. Importing would put the whole casting on one ticket. Try again in a moment.', 'error', 9000);
+        return;
+    }
+    // A casting split over its cast days: the ticket of a day totals that day's pieces only.
+    const ticket = btTicketOnScreen(castingId);
+    if (!ticket) return;
+    let rows = btDayRows(castingId, btDayOf(ticket));
     if (!rows.length) {
-        showToast('No inventory components for this casting', 'error');
+        showToast(btDays(castingId) ? `No pieces cast on Day ${btDayOf(ticket)} (see the Day columns on the Casting Inventory)` : 'No inventory components for this casting', 'error');
         return;
     }
 
     // Multi-color: only total the rows belonging to the active ticket's color
     // (NULL-color ticket matches rows without a color_log_id). Single-ticket
     // mode keeps today's behavior and sums everything.
-    const ticket = getBatchTicketFor(castingId);
-    if (getBatchTicketList(castingId).length > 1) {
+    if (btSameDayTickets(castingId, ticket).length > 1) {
         rows = rows.filter(r => ticket.colorLogId ? r.color_log_id === ticket.colorLogId : !r.color_log_id);
         if (!rows.length) {
             showToast(`No inventory rows for ${batchTicketColorLabel(ticket)}`, 'error');
@@ -12490,6 +13226,9 @@ async function handleImportBatchFromTracking(castingId) {
 let weeklyCastDates = null;      // Map casting_number (trimmed) -> 'YYYY-MM-DD' (first Cast day)
 let weeklyCastDatesFor = null;   // project number the map belongs to
 let weeklyCastLastDates = null;  // Map casting_number -> 'YYYY-MM-DD' (last Cast day: a casting poured over several days is cast once that one is over)
+let weeklyCastAllDates = null;   // Map casting_number -> every Cast day, sorted (2026-11-20: Day 1, Day 2, ...)
+let weeklyCastDatesOk = false;   // false = the last read of the weekly failed (cast days unknown, not "none")
+let castDaysCfgOk = false;       // false = the stored splits could not be read
 
 function isoDay(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function shortDay(iso) { const d = new Date(iso + 'T00:00:00'); return isNaN(d) ? iso : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
@@ -12498,9 +13237,12 @@ async function loadWeeklyCastDates(projectNumber) {
     const pn = String(projectNumber || '').trim();
     const map = new Map();
     const last = new Map();
+    const every = new Map();
     if (!pn) return map;
+    let ok = true;
     try {
         const all = await fetchAllTasks();
+        if (!all || !all.length) ok = false;      // the weekly never has no cards at all: it did not answer
         for (const t of (all || [])) {
             if (t.department !== 'Cast') continue;
             if (String(t.projectNumber || '').trim() !== pn) continue;
@@ -12511,12 +13253,297 @@ async function loadWeeklyCastDates(projectNumber) {
             const iso = isoDay(d);
             if (!map.has(cn) || iso < map.get(cn)) map.set(cn, iso);
             if (!last.has(cn) || iso > last.get(cn)) last.set(cn, iso);
+            if (!every.has(cn)) every.set(cn, []);
+            every.get(cn).push({ iso, day: t.castingDayNumber });
         }
     } catch (err) {
+        ok = false;
         logger.error('[batch-tickets] weekly cast dates failed:', err);
     }
-    if (String(currentProjectNumber || '').trim() === pn) { weeklyCastDates = map; weeklyCastLastDates = last; weeklyCastDatesFor = pn; }
+    if (!ok && weeklyCastDatesFor === pn && weeklyCastAllDates && weeklyCastDatesOk) return weeklyCastDates;   // keep the last good answer
+    if (String(currentProjectNumber || '').trim() === pn) {
+        weeklyCastDatesOk = ok;
+        weeklyCastDates = map; weeklyCastLastDates = last; weeklyCastDatesFor = pn;
+        weeklyCastAllDates = new Map([...every].map(([cn, cards]) => [cn, castDayDates(cards)]));   // Day n = the card with staging day n
+    }
     return map;
+}
+
+// ---------- Cast days across the portal (2026-11-20) ----------
+// A casting the weekly casts on two or more days can be SPLIT: so many pieces of a row on Day 1, so many on Day 2.
+// The split is typed on the Casting Inventory (a Day column per cast day) or made on the Casting Layout tab (send
+// the overflow on, drag a form onto a day); both write the same settings row (src/utils/layout-days.js). Tracking,
+// the labels, the tracking sheet, the layout print and the weekly's Cast and Demold cards all read that one row.
+// The DAYS and their dates always come from the weekly's Cast cards: nothing about dates is typed here.
+let castDaysCfgBy = new Map();     // casting id -> its split (only castings with 2+ cast days are asked for)
+/** Every Cast day of a casting on the weekly, sorted ([] while the weekly has not answered, or has none). */
+function castDatesOf(c) {
+    const pn = String(currentProjectNumber || '').trim();
+    if (!c || !weeklyCastAllDates || weeklyCastDatesFor !== pn) return [];
+    return weeklyCastAllDates.get(String(c.casting_number || '').trim()) || [];
+}
+/** A casting's split as it reads NOW: each inventory row keeps its numbers per day through renames, reorders and
+ *  quantity changes (resolveLayoutDays). Without the inventory at hand the stored piece list is used as it is. */
+function castDaysCfgOf(castingId) {
+    const raw = castDaysCfgBy.get(castingId);
+    if (!raw) return { assign: {}, sides: {} };
+    return castDaysHaveInv(castingId) ? resolveLayoutDays(raw, getInventoryFor(castingId)) : normLayoutDays(raw);
+}
+/** This casting's inventory rows are in memory (casting ids are unique, so they can only be its own). */
+function castDaysHaveInv(castingId) { return currentCastingInventory.has(castingId) && getInventoryFor(castingId).length > 0; }
+/** Re-read one casting's split from the server (before changing it: someone else may have changed it meanwhile).
+ *  @returns the split, or NULL when it could not be read: the caller must then change nothing (a save made from
+ *  "nothing stored" would wipe a split that is really there). */
+async function refreshCastDaysCfg(castingId) {
+    try {
+        const rows = await loadSettingRows([LAYOUT_DAYS_PREFIX + castingId], { strict: true });
+        const v = rows.get(LAYOUT_DAYS_PREFIX + castingId);
+        if (v) castDaysCfgBy.set(castingId, normLayoutDays(v)); else castDaysCfgBy.delete(castingId);
+    } catch (e) {
+        logger.error('[project-portal] cast-day split re-read failed', e);
+        showToast('Could not read the cast-day split just now, so nothing was changed. Try again in a moment.', 'error', 6000);
+        return null;
+    }
+    return castDaysCfgOf(castingId);
+}
+/** One change at a time per casting: a second Day box waits for the first one's save, so neither undoes the other. */
+const castDaysQueue = new Map();
+function castDaysEnqueue(castingId, job) {
+    const next = (castDaysQueue.get(castingId) || Promise.resolve()).then(job, job);
+    castDaysQueue.set(castingId, next.catch(() => {}));
+    return next;
+}
+/** A split ready to store: the pieces, the sides, and the per-row numbers the pieces add up to. */
+function castDaysToStore(castingId, cfg) {
+    const out = { assign: { ...cfg.assign }, sides: { ...cfg.sides } };
+    if (castDaysHaveInv(castingId)) out.rows = layoutDayRows(out.assign, getInventoryFor(castingId));
+    return out;
+}
+async function loadCastDaysCfgs() {
+    const pn = currentProjectNumber;
+    const ids = currentCastings.filter(c => castDatesOf(c).length > 1).map(c => c.id);
+    const map = new Map();
+    try {
+        const rows = ids.length ? await loadSettingRows(ids.map(id => LAYOUT_DAYS_PREFIX + id), { strict: true }) : new Map();
+        for (const [k, v] of rows) map.set(k.slice(LAYOUT_DAYS_PREFIX.length), normLayoutDays(v));
+    } catch (e) {
+        logger.warn('[project-portal] cast-day splits could not be read: what is on screen stays', e);
+        if (currentProjectNumber === pn) castDaysCfgOk = false;
+        return false;
+    }
+    if (currentProjectNumber !== pn) return false;
+    const sig = m => JSON.stringify([...m].map(([id, cfg]) => [id, layoutDaysCanon(cfg)]).sort((a, b) => a[0] < b[0] ? -1 : 1));
+    const changed = sig(map) !== sig(castDaysCfgBy);
+    castDaysCfgBy = map;
+    castDaysCfgOk = true;
+    return changed;
+}
+/** The weekly's cast days + the stored splits, ready for a screen or a print that shows days.
+ *  @returns false when the weekly or the splits could not be read: day by day is then UNKNOWN, not "not split". */
+async function ensureCastDays() {
+    const pn = String(currentProjectNumber || '').trim();
+    if (!pn) return true;
+    try {
+        if (!weeklyCastAllDates || weeklyCastDatesFor !== pn || !weeklyCastDatesOk) await loadWeeklyCastDates(pn);
+        if (currentCastingInventoryLoadedFor !== currentProjectNumber && !currentCastings.every(c => currentCastingInventory.has(c.id))) await loadAllInventoryForCurrentProject();   // the split is read against the inventory
+        await loadCastDaysCfgs();
+    } catch (e) { logger.warn('[project-portal] cast days unavailable', e); return false; }
+    return weeklyCastDatesOk && castDaysCfgOk;
+}
+/** Before a print that goes day by day: say so when the days could not be read (it would print as one list). */
+async function ensureCastDaysForPrint(what) {
+    if (await ensureCastDays()) return;
+    showToast(`The cast days could not be read from the weekly just now: ${what} print as ONE list. If this casting is split over its cast days, print again in a moment.`, 'error', 9000);
+}
+/** The panels of a SPLIT casting day by day: [{ n, of, date, comps }]. null = not split (one list, as before). */
+function castDayGroups(casting, components) {
+    if (!casting) return null;
+    const dates = castDatesOf(casting), nDays = dates.length;
+    const cfg = castDaysCfgOf(casting.id);
+    if (!layoutDaysSplit(cfg, nDays)) return null;
+    const keys = placeKeys(components);
+    const groups = dates.map((date, i) => ({ n: i + 1, of: nDays, date, comps: [] }));
+    components.forEach((c, i) => groups[layoutDayOf(cfg, keys[i], nDays) - 1].comps.push(c));
+    return groups;
+}
+/** A casting with 2+ cast days, as its Casting Inventory shows it: pieces of each row per day, and each day's totals. */
+function invDayInfo(casting, items) {
+    const dates = castDatesOf(casting), nDays = dates.length;
+    if (nDays < 2) return null;
+    const cfg = castDaysCfgOf(casting.id);
+    const byRow = new Map(), keysByRow = new Map();
+    const totals = dates.map(() => ({ pcs: 0, cu: 0, ff: 0, types: new Map() }));
+    for (const { key, row } of inventoryPieceRows(items)) {
+        const d = layoutDayOf(cfg, key, nDays);
+        if (!byRow.has(row.id)) { byRow.set(row.id, dates.map(() => 0)); keysByRow.set(row.id, []); }
+        byRow.get(row.id)[d - 1]++;
+        keysByRow.get(row.id).push(key);
+        const t = totals[d - 1];
+        t.pcs++; t.cu += Number(row.cu_ft) || 0; t.ff += Number(row.ff_sq_ft) || 0;
+        const name = String(row.type || '').trim() || '(no type)';
+        t.types.set(name, (t.types.get(name) || 0) + 1);
+    }
+    return { dates, nDays, cfg, byRow, keysByRow, totals, split: layoutDaysSplit(cfg, nDays) };
+}
+const INV_GRID_TRACKS = ['0.4fr', '0.4fr', '0.65fr', '1.45fr', '0.6fr', '0.6fr', '0.6fr', '1.25fr', '0.55fr', '0.6fr', '0.65fr'];   // = .pp-inv-row-fields in the stylesheet
+/** The row grid with one narrow Day column per cast day after Extras ('' = the stylesheet's own grid). */
+function invGridStyle(nDays) {
+    if (!(nDays > 1)) return '';
+    const t = INV_GRID_TRACKS.slice();
+    t.splice(2, 0, ...Array(nDays).fill('0.42fr'));
+    return ` style="grid-template-columns:${t.map(x => `minmax(0, ${x})`).join(' ')}"`;
+}
+/** Title block (also when the card is folded): what casts on which day, once the casting is split. */
+function castDaysPillHtml(casting, items) {
+    const info = invDayInfo(casting, items);
+    if (!info || !info.split) return '<span class="pp-cast-card-days" data-cast-days hidden></span>';
+    const text = info.totals.map((t, i) => `Day ${i + 1}: ${t.pcs} pcs`).join(' \u00b7 ');
+    const tip = info.totals.map((t, i) => `Day ${i + 1} (${castDayLong(info.dates[i])}): ${t.pcs} pcs, ${roundSig(t.cu, 2)} cu ft, ${roundSig(t.ff, 2)} ff sq ft`).join('. ');
+    return `<span class="pp-cast-card-days" data-cast-days title="${escapeAttr('This casting is split over its cast days. ' + tip + '.')}">${escapeHtml(text)}</span>`;
+}
+/** The strip above the rows: one bubble per cast day with its date and totals. */
+function invDaysBarHtml(casting, info) {
+    const pills = info.dates.map((d, i) => {
+        const t = info.totals[i];
+        return `<span class="pp-inv-day-pill${t.pcs ? '' : ' pp-inv-day-pill-empty'}" title="${escapeAttr(`Day ${i + 1} of ${info.nDays}: the weekly casts this casting on ${castDayLong(d)}`)}"><b>DAY ${i + 1}</b> \u00b7 ${escapeHtml(castDayLong(d))}<span class="pp-inv-day-pill-n">${t.pcs} pcs \u00b7 ${roundSig(t.cu, 2)} cu ft \u00b7 ${roundSig(t.ff, 2)} ff sq ft</span></span>`;
+    }).join('');
+    const hint = info.split
+        ? `<button type="button" class="pp-inv-days-clear" data-inv-days-clear title="Undo the split: every piece back on Day 1">Put everything back on Day 1</button>`
+        : `<span class="pp-inv-days-hint">Not split yet. In the Day ${info.nDays > 2 ? '2, 3 \u2026 columns' : '2 column'}, type how many pieces of a row cast on that day; the rest stay on Day 1.</span>`;
+    return `<div class="pp-inv-days" data-inv-days><span class="pp-inv-days-title">CAST DAYS</span>${pills}${hint}</div>`;
+}
+/** The Day cells of one row: Day 1 is worked out (what is left), Day 2+ are typed. */
+function invDayCellsHtml(item, info) {
+    if (!info) return '';
+    const c = info.byRow.get(item.id) || info.dates.map(() => 0);
+    const pcs = c.reduce((a, b) => a + b, 0);
+    return info.dates.map((d, i) => i === 0
+        ? `<span class="pp-inv-input pp-inv-day-cell" data-inv-day1 title="${escapeAttr(`Pieces of this row that cast on Day 1 \u00b7 ${castDayLong(d)}: whatever is not on a later day`)}">${c[0]}</span>`
+        : `<input type="number" class="pp-inv-input pp-inv-day-input" data-inv-day="${i + 1}" tabindex="-1" min="0" max="${pcs}" step="1" placeholder="0" value="${c[i] ? c[i] : ''}" title="${escapeAttr(`How many of this row's ${pcs} piece${pcs === 1 ? '' : 's'} (qty + extras) cast on Day ${i + 1} \u00b7 ${castDayLong(d)}. The rest stay on Day 1.`)}" />`).join('');
+}
+/** Store a casting's split; forms that changed day leave their saved spot on the layout tables behind. */
+async function saveCastDaysCfg(castingId, cfg, movedKeys) {
+    const store = castDaysToStore(castingId, cfg);
+    try { await setSettingRow(LAYOUT_DAYS_PREFIX + castingId, layoutDaysEmpty(store) ? null : store); }
+    catch (e) { logger.error('[project-portal] save cast-day split failed:', e); showToast('The cast-day split was not saved: ' + (e.message || e), 'error'); return false; }
+    if (layoutDaysEmpty(store)) castDaysCfgBy.delete(castingId); else castDaysCfgBy.set(castingId, store);
+    if (clSelectedCastingId === castingId) clDaysCfg = castDaysCfgOf(castingId);
+    if (movedKeys && movedKeys.length) {
+        try {
+            const comps = getComponentsFor(castingId) || [];
+            const keys = placeKeys(comps);
+            const ids = new Set(comps.filter((c, i) => movedKeys.includes(keys[i])).map(c => c.id));
+            const pos = ids.size ? await loadLayoutPositions(castingId) : [];
+            await Promise.all(pos.filter(p => ids.has(p.component_id)).map(p => deleteLayoutPosition(p.component_id, p.area === 'A' ? 'A' : 'B')));
+            if (clSelectedCastingId === castingId) clLayoutPositions = clLayoutPositions.filter(p => !ids.has(p.component_id));
+        } catch (e) { logger.warn('[project-portal] forgetting the moved forms\' spots failed', e); }
+    }
+    return true;
+}
+/** A Day 2+ box of a row was changed: move that many of the row's pieces to (or back from) that day. */
+function handleInvDayInput(input) {
+    const row = input.closest('.pp-inv-row[data-inventory-id]');
+    if (!row) return;
+    const castingId = row.getAttribute('data-casting-id'), itemId = row.getAttribute('data-inventory-id');
+    const day = parseInt(input.dataset.invDay, 10);
+    const typed = input.value;                 // what was typed, read now: the box may be redrawn while this waits its turn
+    return castDaysEnqueue(castingId, () => applyInvDayInput(castingId, itemId, day, typed));
+}
+async function applyInvDayInput(castingId, itemId, day, typed) {
+    const pn = currentProjectNumber;
+    const casting = currentCastings.find(c => c.id === castingId);
+    if (!casting) return;
+    const fresh = await refreshCastDaysCfg(castingId);       // someone else may have changed the split meanwhile
+    if (currentProjectNumber !== pn) return;
+    const box = () => document.querySelector(`.pp-inv-row[data-inventory-id="${itemId}"] .pp-inv-day-input[data-inv-day="${day}"]`);
+    if (!fresh) { refreshInvDays(castingId, { force: box() }); return; }      // not read: nothing changed, the box goes back
+    const info = invDayInfo(casting, getInventoryFor(castingId));
+    const input = { value: typed };
+    if (!info || !(day > 1 && day <= info.nDays)) return;
+    const keys = info.keysByRow.get(itemId) || [];
+    const cfg = { assign: { ...info.cfg.assign }, sides: { ...info.cfg.sides } };
+    const on = keys.filter(k => layoutDayOf(cfg, k, info.nDays) === day);
+    const day1 = keys.filter(k => layoutDayOf(cfg, k, info.nDays) === 1);
+    let want = Math.max(0, parseInt(input.value, 10) || 0);
+    const max = on.length + day1.length;
+    if (want > max) {
+        want = max;
+        showToast(max
+            ? `Only ${max} piece${max === 1 ? '' : 's'} of this row can cast on Day ${day}${keys.length > max ? ' (the others are on another day)' : ''}.`
+            : `No piece of this row is free for Day ${day}: ${keys.length ? 'they are on another day already' : 'the row has no pieces'}.`, 'info');
+    }
+    const moved = [];
+    // Day 1 keeps the first pieces of the row, later days take them from the end.
+    if (want > on.length) for (const k of day1.slice(day1.length - (want - on.length))) { cfg.assign[k] = day; moved.push(k); }
+    else if (want < on.length) for (const k of on.slice(0, on.length - want)) { delete cfg.assign[k]; moved.push(k); }
+    if (moved.length) await saveCastDaysCfg(castingId, cfg, moved);
+    if (currentProjectNumber !== pn) return;
+    refreshInvDays(castingId, { force: box() });      // the box that was changed shows what was stored (a number that was cut back)
+}
+function handleInvDaysClear(castingId) {
+    if (!window.confirm('Put every piece of this casting back on Day 1?\n\nThe weekly goes back to showing the whole casting on each of its cast days, and Tracking, the labels and the layout go back to one list.')) return;
+    return castDaysEnqueue(castingId, async () => {
+        const pn = currentProjectNumber;
+        const casting = currentCastings.find(c => c.id === castingId);
+        if (!casting || !(await refreshCastDaysCfg(castingId)) || currentProjectNumber !== pn) return;
+        const info = invDayInfo(casting, getInventoryFor(castingId));
+        if (info && info.split) {
+            const moved = Object.keys(info.cfg.assign);
+            if (await saveCastDaysCfg(castingId, { assign: {}, sides: { ...info.cfg.sides } }, moved)) showToast('Every piece is back on Day 1.', 'success');
+        }
+        if (currentProjectNumber === pn) refreshInvDays(castingId, { force: true });
+    });
+}
+/** After an inventory edit: when the row numbers now land on other pieces than the stored ones (a type renamed, a
+ *  quantity changed, rows reordered), store the pieces as they read now, so every screen without the inventory at
+ *  hand (another job's layout day) sees the same. Quiet: nothing changes on screen. */
+const castDaysHealTimers = new Map();
+function healCastDays(castingId) {
+    const raw = castDaysCfgBy.get(castingId);
+    if (!raw || !raw.rows) return;
+    clearTimeout(castDaysHealTimers.get(castingId));
+    const pn = currentProjectNumber;
+    castDaysHealTimers.set(castingId, setTimeout(() => {
+        castDaysHealTimers.delete(castingId);
+        if (currentProjectNumber !== pn) return;                 // another job is open now: its inventory is not this casting's
+        castDaysEnqueue(castingId, async () => {
+            const now = castDaysCfgBy.get(castingId);
+            if (currentProjectNumber !== pn || !now || !now.rows || !castDaysHaveInv(castingId)) return;
+            const store = castDaysToStore(castingId, castDaysCfgOf(castingId));
+            if (layoutDaysCanon(store) === layoutDaysCanon(now)) return;
+            try {
+                await setSettingRow(LAYOUT_DAYS_PREFIX + castingId, layoutDaysEmpty(store) ? null : store);
+                if (layoutDaysEmpty(store)) castDaysCfgBy.delete(castingId); else castDaysCfgBy.set(castingId, store);
+                if (clSelectedCastingId === castingId) clDaysCfg = castDaysCfgOf(castingId);
+            } catch (e) { logger.warn('[project-portal] cast-day split follow-up save failed (it is still read correctly here)', e); }
+        });
+    }, 1500));
+}
+/** Redraw only the day parts of one casting card. The Day box someone is typing in is left alone (opts.force: that
+ *  one box, or true for all of them, is written anyway: it was just stored or undone). */
+function refreshInvDays(castingId, opts = {}) {
+    const card = document.querySelector(`.pp-cast-card[data-casting-id="${castingId}"]`);
+    const casting = currentCastings.find(c => c.id === castingId);
+    if (!card || !casting) return;
+    const items = getInventoryFor(castingId);
+    const pill = card.querySelector('[data-cast-days]');
+    if (pill) pill.outerHTML = castDaysPillHtml(casting, items);
+    const info = invDayInfo(casting, items);
+    const bar = card.querySelector('[data-inv-days]');
+    if (!info || !bar) return;
+    bar.outerHTML = invDaysBarHtml(casting, info);
+    card.querySelectorAll('.pp-inv-row[data-inventory-id]').forEach(r => {
+        const c = info.byRow.get(r.getAttribute('data-inventory-id')) || info.dates.map(() => 0);
+        const pcs = c.reduce((a, b) => a + b, 0);
+        const d1 = r.querySelector('[data-inv-day1]');
+        if (d1) d1.textContent = c[0];
+        r.querySelectorAll('.pp-inv-day-input').forEach(inp => {
+            const n = c[parseInt(inp.dataset.invDay, 10) - 1] || 0;
+            inp.max = pcs;
+            if (inp === document.activeElement && opts.force !== true && opts.force !== inp) return;   // being typed in
+            inp.value = n ? n : '';
+        });
+    });
 }
 
 // ---------- Cast day on the Casting Inventory cards (2026-11-16) ----------
@@ -13354,7 +14381,7 @@ function descriptionLinesHtml(text) {
     return String(text || '').split(',').map(x => x.trim()).filter(Boolean).map(escapeHtml).join('<br>');
 }
 
-function buildTrackPrintHtml(casting, components, projectNumber, projectName) {
+function buildTrackPrintHtml(casting, components, projectNumber, projectName, day = null) {
     const num = casting.casting_number || '';
     const desc = casting.description || '';
 
@@ -13518,6 +14545,7 @@ function buildTrackPrintHtml(casting, components, projectNumber, projectName) {
 
     const headerMeta = [
         castLabel ? `<span><b>Cast&nbsp;#</b>&nbsp;${escapeHtml(String(num) || '')}${desc ? ` ${escapeHtml(desc)}` : ''}</span>` : '',
+        day ? `<span class="tp-day"><b>Cast&nbsp;day</b>&nbsp;${day.n} of ${day.of} &middot; ${escapeHtml(castDayLong(day.date))}</span>` : '',
         castColor ? `<span><b>Color</b>&nbsp;${escapeHtml(castColor)}</span>` : '',
         `<span><b>Date</b>&nbsp;${escapeHtml(dateLabel)}</span>`,
         `<span><b>Total&nbsp;Panels</b>&nbsp;${components.length}</span>`
@@ -13545,6 +14573,7 @@ function buildTrackPrintHtml(casting, components, projectNumber, projectName) {
 async function handlePrintTracking(castingId) {
     if (!castingId) return;
     if (!(await printGate([castingId], 'Final Tracking'))) return;
+    await ensureCastDaysForPrint('the tracking sheet will');
     msArmStamp([castingId], 'Final Tracking');
     handlePrintTrackingNow(castingId);
 }
@@ -13562,7 +14591,18 @@ function handlePrintTrackingNow(castingId) {
     // Single continuous sheet — header once at the top, then one long table.
     // The browser paginates the table automatically and repeats the <thead>
     // on each printed page (handled by CSS in TRACK_PRINT_CSS).
-    const html = buildTrackPrintHtml(casting, components, projectNumber, projectName);
+    // A casting split over its cast days (2026-11-20): one sheet per day, each on its own page, each saying its day.
+    const dayGroups = (castDayGroups(casting, components) || []).filter(g => g.comps.length);
+    let html;
+    if (dayGroups.length > 1) {
+        const docs = dayGroups.map(g => buildTrackPrintHtml(casting, g.comps, projectNumber, projectName, g));
+        const bodyOf = d => d.slice(d.indexOf('<body>') + 6, d.lastIndexOf('</body>'));
+        const more = docs.slice(1).map(d => `<div style="break-before:page;page-break-before:always;">${bodyOf(d)}</div>`).join('');
+        const at = docs[0].lastIndexOf('</body>');
+        html = docs[0].slice(0, at) + more + docs[0].slice(at);
+    } else {
+        html = buildTrackPrintHtml(casting, components, projectNumber, projectName, dayGroups[0] || null);
+    }
 
     // Remove any leftover iframe from a prior print attempt.
     const prior = document.getElementById('pp-track-print-frame');
@@ -13671,6 +14711,18 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: #000; background: #fff
     padding-bottom: 0.02in;
     line-height: 1;
     overflow: hidden;
+    white-space: nowrap;
+}
+.sticker-day {
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 0 0.05in;
+    padding: 1pt 5pt;
+    border: 1.5pt solid #000;
+    border-radius: 3pt;
+    font-size: 11pt;
+    font-weight: 800;
+    letter-spacing: 0.04em;
     white-space: nowrap;
 }
 .sticker-finish {
@@ -13788,6 +14840,11 @@ function buildStickerPrintHtml(casting, components, projectName) {
         ? `${cleanProject} : ${phaseName} · ${castLabel}`
         : `${cleanProject} : ${castLabel}`;
 
+    // A casting split over its cast days (2026-11-20): one pile per day. Each day gets its own title sticker (with the
+    // day and its date) and every panel sticker says its day. Day 1's pile comes out on top.
+    const dayGroups = (castDayGroups(casting, components) || []).filter(g => g.comps.length);
+    const pile = (components, day) => {
+    const dayTag = day ? `<div class="sticker-day">DAY ${day.n}</div>` : '';   // boxed, beside the panel number (the title line has no room)
     // Inventory summary: group by type, count panels per type.
     // Format mirrors the original sticker maker: "{type} - ({n}pcs)".
     const counts = new Map();
@@ -13798,6 +14855,7 @@ function buildStickerPrintHtml(casting, components, projectName) {
     const inventoryItems = Array.from(counts.entries())
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([t, n]) => `<p>${escapeHtml(t)} - (${n}pcs)</p>`);
+    if (day) inventoryItems.unshift(`<p><b>DAY ${day.n} OF ${day.of} \u00b7 ${escapeHtml(castDayLong(day.date))}</b></p>`);
     inventoryItems.push(`<p>(${components.length}) Pieces Total</p>`);
 
     // Per-panel color resolution; title sticker shows the distinct set.
@@ -13834,15 +14892,19 @@ function buildStickerPrintHtml(casting, components, projectName) {
                 <div class="sticker-content${panelDesc ? ' has-desc' : ''}">
                     <div class="sticker-bottom">${escapeHtml(panel)}</div>
                     ${panelDesc ? `<div class="sticker-desc"><span>${escapeHtml(panelDesc)}</span></div>` : ''}
+                    ${dayTag}
                 </div>
                 <div class="sticker-finish">${escapeHtml(panelColor)}</div>
             </div>
         `;
     }).join('');
 
+    return panelStickers + titleSticker;
+    };
+    const piles = dayGroups.length > 1 ? dayGroups.slice().reverse().map(g => pile(g.comps, g)).join('') : pile(components, dayGroups[0] || null);
+
     return `<!doctype html><html><head><meta charset="utf-8"><title>Stickers — ${escapeHtml(cleanProject)} — ${escapeHtml(castLabel)}</title><style>${STICKER_PRINT_CSS}</style></head><body>
-        ${panelStickers}
-        ${titleSticker}
+        ${piles}
         <script>${STICKER_PRINT_AUTOFIT_JS}<\/script>
     </body></html>`;
 }
@@ -13850,6 +14912,7 @@ function buildStickerPrintHtml(casting, components, projectName) {
 async function handlePrintStickers(castingId) {
     if (!castingId) return;
     if (!(await printGate([castingId], 'Labels'))) return;
+    await ensureCastDaysForPrint('the labels will');
     msArmStamp([castingId], 'Labels');
     return handlePrintStickersNow(castingId);
 }
@@ -15319,23 +16382,126 @@ function handlePrintOptimizer(castingIds) {
 // ---------- Print ----------
 
 
+let btLastPrintedDays = null;     // split casting, the last ticket print: { printed: days printed, batched: days that have a ticket to print }
 async function handlePrintBatchTickets(castingId) {
     if (!currentCastings.find(c => c.id === castingId)) return;
     if (!(await printGate([castingId], 'Batching Sheets'))) return;
-    if (handlePrintBatchTicketsNow(castingId) !== false) stampPrinted([castingId], 'Batching Sheets');
+    await ensureCastDaysForPrint('the batch tickets will');
+    // A casting split over its cast days: pick the days in a pop-up, every day ticked to start with.
+    let days = null;
+    if (btDays(castingId)) {
+        days = await pickBatchPrintDays(castingId);
+        if (!days) return;
+    }
+    btLastPrintedDays = null;
+    if (handlePrintBatchTicketsNow(castingId, days) !== false) stampBatchPrinted(castingId, btLastPrintedDays);
 }
-function handlePrintBatchTicketsNow(castingId) {
+/**
+ * Which cast days of a split casting to print (2026-11-20: "pop up default will have both days selected ... if
+ * you're just reprinting one day for whatever reason i need that option"). Resolves the ticked day numbers, or null
+ * when cancelled. A day with no batch ticket yet is listed but cannot be ticked. Nothing to print on any day: no
+ * pop-up, the print's own message follows.
+ */
+let btDaysPickCancel = null;
+function pickBatchPrintDays(castingId) {
     const casting = currentCastings.find(c => c.id === castingId);
-    if (!casting) return false;
-    const list = getBatchTicketList(castingId);
-
-    // Print every color ticket that yields batches; each plan restarts numbering.
+    const info = btDays(castingId);
+    const { printable } = btPrintable(castingId);
+    const dayNs = info ? info.totals.map((t, i) => (t.pcs > 0 ? i + 1 : 0)).filter(Boolean) : [];
+    if (!casting || !info || !printable.length) return Promise.resolve(dayNs);
+    const byDay = new Map();
+    for (const p of printable) {
+        const d = btDayOf(p.ticket);
+        const o = byDay.get(d) || { colors: 0, batches: 0 };
+        o.colors++; o.batches += p.plan.batches.length;
+        byDay.set(d, o);
+    }
+    // what the Releasability Board has for each day so far
+    let before = null;
+    if (msOn()) {
+        const note = batchDaysStamp(dayNs, [], msRow(castingId, 'Batching Sheets'), dayNs.filter(n => !byDay.has(n)));
+        before = note ? batchDaysPrinted(note) : dayNs;
+    }
+    const rows = dayNs.map(n => {
+        const o = byDay.get(n), pcs = info.totals[n - 1].pcs;
+        const what = o
+            ? `${pcs} pc${pcs === 1 ? '' : 's'} \u00b7 ${o.colors > 1 ? o.colors + ' colors \u00b7 ' : ''}${o.batches} batch${o.batches === 1 ? '' : 'es'}`
+            : `${pcs} pc${pcs === 1 ? '' : 's'} \u00b7 no batch ticket yet (nothing imported on this day)`;
+        const state = !o || !before ? '' : before.includes(n)
+            ? '<span class="pp-bt-days-state pp-bt-days-state-done">printed before</span>'
+            : '<span class="pp-bt-days-state">not printed yet</span>';
+        return `<label class="pp-bt-days-row${o ? '' : ' pp-bt-days-row-off'}">
+                <input type="checkbox" data-bt-print-day="${n}"${o ? ' checked' : ' disabled'}>
+                <span class="pp-bt-days-name">Day ${n}</span>
+                <span class="pp-bt-days-date">${escapeHtml(info.dates[n - 1] ? shortDay(info.dates[n - 1]) : '')}</span>
+                <span class="pp-bt-days-what">${escapeHtml(what)}</span>${state}
+            </label>`;
+    }).join('');
+    return new Promise(resolve => {
+        if (btDaysPickCancel) btDaysPickCancel();     // one pop-up at a time: an older one counts as cancelled
+        const el = document.createElement('div');
+        el.id = 'pp-bt-days-modal';
+        el.className = 'pp-modal-backdrop';
+        el.innerHTML = `<div class="pp-modal pp-bt-days-modal" role="dialog" aria-modal="true" aria-labelledby="pp-bt-days-title">
+            <div class="pp-modal-header"><h2 id="pp-bt-days-title">Print batch tickets \u2014 Cast ${escapeHtml(String(casting.casting_number || ''))}</h2><button type="button" class="pp-modal-close" data-bt-days="cancel" aria-label="Close">&times;</button></div>
+            <div class="pp-modal-body">
+                <p class="pp-bt-days-hint">This casting casts over ${dayNs.length} days. Every day is ticked. Untick a day to leave it out, for example when reprinting one day only.</p>
+                <div class="pp-bt-days-list">${rows}</div>
+                <p class="pp-bt-days-foot" data-bt-days-foot></p>
+                <div class="pp-modal-actions">
+                    <button type="button" class="pp-secondary-btn" data-bt-days="cancel">Cancel</button>
+                    <button type="button" class="pp-primary-btn" data-bt-days="print">Print</button>
+                </div>
+            </div></div>`;
+        document.body.appendChild(el);
+        const printBtn = el.querySelector('[data-bt-days="print"]');
+        const foot = el.querySelector('[data-bt-days-foot]');
+        const ticked = () => [...el.querySelectorAll('[data-bt-print-day]:checked')].map(b => parseInt(b.getAttribute('data-bt-print-day'), 10));
+        const sync = () => {
+            const t = ticked();
+            printBtn.disabled = !t.length;
+            printBtn.textContent = !t.length ? 'Print' : t.length === dayNs.length ? (t.length === 2 ? 'Print both days' : `Print all ${t.length} days`) : `Print Day ${t.join(' + ')} only`;
+            // what the board will show after this print
+            const after = new Set([...(before || []), ...t].filter(n => byDay.has(n)));
+            const left = dayNs.filter(n => !after.has(n));
+            foot.textContent = !t.length ? 'Tick at least one day.'
+                : !msOn() ? ''
+                : left.length ? `Releasability Board: Batching Sheets stays orange until Day ${left.join(' and Day ')} ${left.length === 1 ? 'is' : 'are'} printed too.`
+                : 'Releasability Board: Batching Sheets turns green, every day is printed.';
+            foot.classList.toggle('pp-bt-days-foot-warn', !t.length || left.length > 0);
+        };
+        const done = (v) => { btDaysPickCancel = null; document.removeEventListener('keydown', onKey, true); el.remove(); resolve(v); };
+        btDaysPickCancel = () => done(null);
+        const onKey = (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(null); }
+            else if (e.key === 'Enter' && !printBtn.disabled) { e.preventDefault(); e.stopPropagation(); done(ticked()); }
+        };
+        document.addEventListener('keydown', onKey, true);
+        el.addEventListener('change', sync);
+        el.addEventListener('click', (e) => {
+            if (e.target === el || e.target.closest('[data-bt-days="cancel"]')) return done(null);
+            if (e.target.closest('[data-bt-days="print"]') && !printBtn.disabled) done(ticked());
+        });
+        sync();
+        printBtn.focus();
+    });
+}
+/** The tickets of a casting that yield batches (what a print covers), and the left-over ones of a split casting. */
+function btPrintable(castingId) {
+    const casting = currentCastings.find(c => c.id === castingId);
     const printable = [];
+    const leftOver = [];
+    if (!casting) return { printable, leftOver };
+    const list = getBatchTicketList(castingId);
+    // Every color ticket that yields batches; each plan restarts numbering.
     for (const ticket of list) {
+        // split casting: a ticket of a day none of its colour casts on any more is left over, never printed
+        // any casting (2026-11-24): a ticket in a colour none of the pieces has any more is left over too
+        if (btLeftOver(castingId, ticket)) { leftOver.push(batchTicketPillLabel(ticket)); continue; }
         const activeLog = getActiveBatchColorLog(casting, ticket);
         const sandLbs = getColorLogSandLbs(activeLog);
         if (!sandLbs) continue;
-        const plan = buildBatchPlan({
+        const plan = buildBatchPlan({ sizing: btSizing(),
             totalCuFt: parseFloat(ticket.cuFt) || 0,
             faceSqFt: parseFloat(ticket.faceSqFt) || 0,
             cuFtPer250: parseFloat(ticket.cuFtPer250) || 4.28,
@@ -15346,8 +16512,20 @@ function handlePrintBatchTicketsNow(castingId) {
         if (!plan.batches.length) continue;
         printable.push({ ticket, activeLog, plan });
     }
+    return { printable, leftOver };
+}
+/** @param {number[]|null} [days] split casting: the cast days to print (picked in the pop-up); none = every ticket */
+function handlePrintBatchTicketsNow(castingId, days = null) {
+    const casting = currentCastings.find(c => c.id === castingId);
+    if (!casting) return false;
+    const { printable: every, leftOver } = btPrintable(castingId);
+    const printable = Array.isArray(days) ? every.filter(p => days.includes(btDayOf(p.ticket))) : every;
 
     if (!printable.length) {
+        if (!every.length && leftOver.length) {
+            showToast(`Nothing to print: the only batched ticket (${leftOver.join(', ')}) is left over — no piece of this casting ${btDays(castingId) ? 'casts in that color on that day' : 'is that color'} any more. Batch the casting in the color its pieces have now (Import from Tracking), then print.`, 'error', 14000);
+            return false;
+        }
         // Keep the single-ticket error behavior, judged against the active ticket.
         const ticket = getBatchTicketFor(castingId);
         const activeLog = getActiveBatchColorLog(casting, ticket);
@@ -15360,6 +16538,9 @@ function handlePrintBatchTicketsNow(castingId) {
     }
 
     const projectName = document.getElementById('pp-f-project_name')?.value || '';
+    btLastPrintedDays = btDays(castingId)
+        ? { printed: [...new Set(printable.map(p => btDayOf(p.ticket)))], batched: [...new Set(every.map(p => btDayOf(p.ticket)))] } : null;
+    if (leftOver.length) showToast(`Not printed, left over (${btDays(castingId) ? 'nothing of that color casts on that day any more' : 'no piece of this casting is that color any more'}): ${leftOver.join(', ')}`, 'info', 10000);
 
     const pages = printable.map(({ ticket, activeLog, plan }) => {
         const sampleName = activeLog?.name || '';
@@ -15368,7 +16549,7 @@ function handlePrintBatchTicketsNow(castingId) {
         // these, renderBatchTicketCard() falls back to its defaults and the
         // printed tickets show un-reduced pigment values even though the on-screen
         // preview applies the reduction.
-        const pigReductionPct = parsePigReduction(ticket.pigReduction);
+        const pigReductionPct = btPigPct(ticket);
         const reduceFirstBackup = !!ticket.pigReduceFirstBackup;
         const omitAggFinalBackup = !!ticket.omitAggFinalBackup;
         const omitFibersFace = !!ticket.omitFibersFace;
@@ -15385,8 +16566,8 @@ function handlePrintBatchTicketsNow(castingId) {
                 project: projectName,
                 sampleName,
                 castMethod,
-                castNumber: casting.casting_number || '',
-                castDate: casting.casting_date || '',
+                castNumber: btCastLabel(casting, ticket),
+                castDate: btCastDate(casting, ticket),
                 colorName: ticket.colorLogId ? (activeLog?.name || '') : '',
                 batchedBy: ticket.batchedBy,
                 notes: ticket.notes,
@@ -15397,7 +16578,7 @@ function handlePrintBatchTicketsNow(castingId) {
                 cowbayFinalBackup,
                 // Project-wide slump target for this batch's type — mirror the on-screen
                 // preview (renderBatchTicketCards) so print isn't stuck on the 5" default.
-                targetSlump: clampSlumpTarget(currentSlumpTargets[b.type])
+                rules: btRules(), targetSlump: clampSlumpTarget(currentSlumpTargets[b.type])
             })}
         </div>
     `).join('');

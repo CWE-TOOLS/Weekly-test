@@ -37,6 +37,9 @@ import { buildBatchPlan, getColorLogSandLbs, roundSig } from '../utils/batch-cal
 import { loadMilestonesForProjects, parseLayoutCondition } from './milestones-service.js';
 import { getSpecialBatching } from '../config/special-batching.js';
 import { parseDate } from '../utils/date-utils.js';
+import { loadSettingRows } from './schedule-service.js';
+import { loadBatchRulesMap, rulesSizing } from './batch-rules.js';
+import { LAYOUT_DAYS_PREFIX, normLayoutDays, resolveLayoutDays, castDayDates, layoutDayOf, layoutDaysSplit, layoutDaySide, inventoryPieceRows, isBatchDaysNote, batchDaysPrinted } from '../utils/layout-days.js';
 import { setAllTasks, getAllTasks } from '../core/state.js';
 
 import { logger } from '../utils/logger.js';
@@ -501,10 +504,12 @@ export async function enrichTasksWithPieces(tasks) {
         // Sum quantity + extras per casting (same formula as the portal "pcs"
         // total). Batch tickets + color logs load in parallel — they feed the
         // color-log-title / batch-count enrichment below.
-        const [inventoryByCasting, ticketsByCasting, colorLogsByProject, milestones] = await Promise.all([
+        // batchRulesByProject (2026-11-25): jobs with their own batching rules (portal: Batch Tickets, Job Batching)
+        const [inventoryByCasting, ticketsByCasting, colorLogsByProject, batchRulesByProject, milestones] = await Promise.all([
             loadAllInventoryForProject([...referencedIds]),
             loadBatchTicketsForCastings([...referencedIds]),
             loadColorLogsForProjects(projectNumbers),
+            loadBatchRulesMap(projectNumbers).catch(err => { logger.error('[data-service] batch rules load failed (non-fatal):', err); return new Map(); }),
             loadMilestonesForProjects(projectNumbers).catch(err => { logger.error('[data-service] milestones load failed (non-fatal):', err); return { byCasting: new Map(), touched: new Set() }; })
         ]);
         // Per-casting inventory summary (2026-10-21): the portal's title-block line
@@ -533,17 +538,85 @@ export async function enrichTasksWithPieces(tasks) {
                 byType: [...byType].map(([type, qty]) => ({ type, qty }))
             });
         }
+        // Cast days (2026-11-20): a casting the portal has SPLIT over its Cast days (Casting Inventory or Casting
+        // Layout tab) shows, on each day's Cast card, only the pieces of that day (and that day's side). The day
+        // number is the place of the card's date among the casting's Cast cards. A casting nobody split keeps the
+        // whole inventory on every day. DEMOLD MIMICS CAST: the n-th Demold day carries what Cast day n cast; when
+        // Demold has fewer days than Cast, its last day carries the rest.
+        const isoOf = (v) => { const d = parseDate(v); return d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : ''; };
+        const castDatesById = new Map();          // casting id -> its Cast days, sorted
+        const demoldDatesById = new Map();        // casting id -> its Demold days, sorted
+        for (const t of linked) {
+            if (t.department !== 'Cast' && t.department !== 'Demold') continue;
+            const id = idByKey.get(`${String(t.projectNumber).trim()}|${String(t.castingNumber).trim()}`);
+            const iso = id ? isoOf(t.date) : '';
+            if (!iso) continue;
+            const map = t.department === 'Cast' ? castDatesById : demoldDatesById;
+            if (!map.has(id)) map.set(id, []);
+            map.get(id).push({ iso, day: t.castingDayNumber });   // the card's Staging-tab day: the split's Day n is that card
+        }
+        for (const [id, cards] of castDatesById) castDatesById.set(id, castDayDates(cards));
+        for (const [id, cards] of demoldDatesById) demoldDatesById.set(id, castDayDates(cards));
+        const daysCfgById = new Map();            // casting id -> its stored split (only castings with 2+ Cast days are asked for)
+        const dayAccById = new Map();             // SPLIT castings only: casting id -> one tally per cast day
+        /** The inventory summary of cast days from..to of a split casting (one day, or several on one Demold day). */
+        const sumOfDays = (id, from, to) => {
+            const acc = dayAccById.get(id);
+            if (!acc) return null;
+            const rows = new Set(), byType = new Map();
+            let pcs = 0, cu = 0, ff = 0, noCu = false, noFf = false;
+            for (let d = from; d <= to && d <= acc.length; d++) {
+                const a = acc[d - 1];
+                a.rows.forEach(r => rows.add(r));
+                pcs += a.pcs; cu += a.cu; ff += a.ff;
+                noCu = noCu || a.noCu; noFf = noFf || a.noFf;
+                for (const [type, qty] of a.byType) byType.set(type, (byType.get(type) || 0) + qty);
+            }
+            return {
+                types: rows.size, pcs, cuFt: roundSig(cu, 2), ff: roundSig(ff, 2),
+                cuFtComplete: !noCu, ffComplete: !noFf,
+                byType: [...byType].map(([type, qty]) => ({ type, qty })),
+                day: to > from ? { n: from, to, of: acc.length } : { n: from, of: acc.length }
+            };
+        };
+        try {
+            const multi = [...castDatesById].filter(([, dates]) => dates.length > 1).map(([id]) => id);
+            if (multi.length) {
+                const rows = await loadSettingRows(multi.map(id => LAYOUT_DAYS_PREFIX + id));
+                // read against the inventory as it is now: each row keeps its numbers per day (a renamed type, reordered rows)
+                for (const [k, v] of rows) { const id = k.slice(LAYOUT_DAYS_PREFIX.length); daysCfgById.set(id, resolveLayoutDays(v, inventoryByCasting.get(id) || [])); }
+            }
+            for (const [id, cfg] of daysCfgById) {
+                const nDays = castDatesById.get(id).length;
+                if (!layoutDaysSplit(cfg, nDays)) continue;
+                const acc = Array.from({ length: nDays }, () => ({ rows: new Set(), pcs: 0, cu: 0, ff: 0, noCu: false, noFf: false, byType: new Map() }));
+                for (const { key, row } of inventoryPieceRows(inventoryByCasting.get(id) || [])) {
+                    const a = acc[layoutDayOf(cfg, key, nDays) - 1];
+                    a.rows.add(row); a.pcs++;
+                    a.cu += Number(row.cu_ft) || 0; a.ff += Number(row.ff_sq_ft) || 0;
+                    if (blank(row.cu_ft)) a.noCu = true;
+                    if (blank(row.ff_sq_ft)) a.noFf = true;
+                    const name = String(row.type || '').trim() || '(no type)';
+                    a.byType.set(name, (a.byType.get(name) || 0) + 1);
+                }
+                dayAccById.set(id, acc);
+            }
+        } catch (err) {
+            logger.error('[data-service] cast-day split load failed (non-fatal):', err);
+        }
         // Batch tickets that still have to be printed (2026-10-21), from the Releasability Board's
         // Batching Sheets cell: never printed (jobs on the board format only) or printed, then the
         // Casting Inventory changed enough that the tickets come out different.
         const INV_CHANGED_NOTE = 'Casting Inventory changed after this was printed — print it again';
         const batchPrintById = new Map();
+        const batchPrintedDaysById = new Map();     // split casting printed day by day: casting id -> the days printed so far
         for (const castingId of referencedIds) {
             const project = (castings.find(c => c.id === castingId) || {}).project_number;
             if (!milestones.touched.has(String(project || '').trim())) continue;
             const row = milestones.byCasting.get(castingId)?.get('Batching Sheets') || null;
             if (!row || row.status === 'red') batchPrintById.set(castingId, 'unprinted');
             else if (row.status === 'orange' && row.note === INV_CHANGED_NOTE) batchPrintById.set(castingId, 'reprint');
+            else if (row.status === 'orange' && isBatchDaysNote(row.note)) batchPrintedDaysById.set(castingId, new Set(batchDaysPrinted(row.note)));
         }
 
         // Per-casting color log title + batch count, mirroring the portal's
@@ -555,14 +628,25 @@ export async function enrichTasksWithPieces(tasks) {
             if (c.id) projectByCastingId.set(c.id, String(c.project_number || '').trim());
         }
         const batchInfoById = new Map();
+        const batchInfoByDay = new Map();        // SPLIT castings: casting id -> Map(cast day -> that day's tickets' info)
+        const ticketDay = (t) => (parseInt(t && t.castDay, 10) > 1 ? parseInt(t.castDay, 10) : 1);
         for (const castingId of referencedIds) {
+          // Batch tickets per cast day (2026-11-20): a casting split over its cast days has one ticket set per day.
+          // Not split: its Day 1 tickets, as always (a ticket an old split left on a later day is not counted).
+          const allTickets = ticketsByCasting.get(castingId) || [];
+          const nSplitDays = (dayAccById.has(castingId) && !getSpecialBatching(projectByCastingId.get(castingId))) ? dayAccById.get(castingId).length : 0;
+          const ticketSets = nSplitDays
+              ? [[0, allTickets.filter(t => ticketDay(t) <= nSplitDays)], ...Array.from({ length: nSplitDays }, (_, i) => [i + 1, allTickets.filter(t => ticketDay(t) === i + 1)])]
+              : [[0, allTickets.filter(t => ticketDay(t) === 1)]];
+          for (const [dayKey, tickets] of ticketSets) {
             try {
                 const projectLogs = colorLogsByProject.get(projectByCastingId.get(castingId)) || [];
                 const logById = new Map(projectLogs.map(l => [l.id, l]));
-                const tickets = ticketsByCasting.get(castingId) || [];
                 // Projects batched on a dedicated page plan with their own sizing, so the
                 // count shown on the board matches that page (config/special-batching.js).
-                const sizing = getSpecialBatching(projectByCastingId.get(castingId))?.sizing || null;
+                // A job batched on the regular tab with its own rules (batch sizes, face thickness, layers) plans with those.
+                const sizing = getSpecialBatching(projectByCastingId.get(castingId))?.sizing
+                    || rulesSizing(batchRulesByProject.get(String(projectByCastingId.get(castingId) ?? '').trim()) || null);
 
                 const names = [];
                 const methods = [];
@@ -599,14 +683,18 @@ export async function enrichTasksWithPieces(tasks) {
                     if (projectLogs[0].name) names.push(projectLogs[0].name);
                     addMethod(projectLogs[0]);
                 }
-                batchInfoById.set(castingId, {
+                const infoOut = {
                     colorLogTitle: names.join(' / '),
                     castMethod: methods.join(' / '),
-                    batchCount: batchTotal
-                });
+                    batchCount: batchTotal,
+                    hasTickets: tickets.length > 0
+                };
+                if (dayKey === 0) batchInfoById.set(castingId, infoOut);
+                else { if (!batchInfoByDay.has(castingId)) batchInfoByDay.set(castingId, new Map()); batchInfoByDay.get(castingId).set(dayKey, infoOut); }
             } catch (err) {
                 logger.error('[data-service] batch enrichment failed for casting (non-fatal):', castingId, err);
             }
+          }
         }
 
         let matched = 0;
@@ -626,7 +714,28 @@ export async function enrichTasksWithPieces(tasks) {
             const total = id ? piecesById.get(id) : undefined;
             if (total) { t.piecesCount = total; matched++; }
             const inv = id ? invSummaryById.get(id) : undefined;
-            if (inv) t.invSummary = inv;
+            if (inv) { t.invSummary = inv; t.invCasting = inv; }   // invCasting stays the WHOLE casting (the maps total it); invSummary can become one day's share below
+            // A Cast or Demold card of a casting with 2+ cast days: that day's side, and once the casting is split,
+            // that day's pieces. Demold day n = Cast day n; a last Demold day with cast days left over carries them all.
+            const nCastDays = id ? (castDatesById.get(id) || []).length : 0;
+            if (nCastDays > 1 && (t.department === 'Cast' || t.department === 'Demold')) {
+                const own = (t.department === 'Cast' ? castDatesById.get(id) : demoldDatesById.get(id)) || [];
+                const dayN = own.indexOf(isoOf(t.date)) + 1;
+                const cfg = daysCfgById.get(id);
+                const to = (t.department === 'Demold' && dayN === own.length) ? nCastDays : dayN;
+                // every cast day on one Demold day is the whole casting: that card stays as it was. Demold on MORE days
+                // than Cast cannot be paired day for day: all of its cards stay the whole casting (never a share next
+                // to a whole, which would read as double).
+                if (cfg && dayN > 0 && own.length <= nCastDays && !(dayN === 1 && to === nCastDays)) {
+                    const side = layoutDaySide(sideById.get(id), cfg, dayN);
+                    if (side) t.castingSide = side;
+                    const daySum = sumOfDays(id, dayN, to);
+                    if (daySum) {
+                        t.invSummary = daySum;
+                        if (daySum.pcs > 0) t.piecesCount = daySum.pcs; else delete t.piecesCount;
+                    }
+                }
+            }
             const bp = (id && t.department === 'Cast') ? batchPrintById.get(id) : undefined;
             if (bp) t.batchPrintState = bp;
 
@@ -634,7 +743,14 @@ export async function enrichTasksWithPieces(tasks) {
             // readouts (matches t.department === 'Cast' comparisons used
             // throughout, e.g. schedule-utils, print-renderer). The pcs count
             // above keeps its existing visibility on all casting-linked tasks.
-            const info = (id && t.department === 'Cast') ? batchInfoById.get(id) : undefined;
+            // A Cast card of a casting split over its cast days reads its own day's tickets.
+            const cardDay = (id && t.department === 'Cast' && batchInfoByDay.has(id)) ? ((castDatesById.get(id) || []).indexOf(isoOf(t.date)) + 1) : 0;
+            // batch tickets printed for some cast days only: the card of a day that is not printed yet says so
+            if (cardDay > 0 && batchPrintedDaysById.has(id) && !batchPrintedDaysById.get(id).has(cardDay)) t.batchPrintState = 'unprinted';
+            const wholeInfo = (id && t.department === 'Cast') ? batchInfoById.get(id) : undefined;
+            const dayInfo = cardDay > 0 ? batchInfoByDay.get(id).get(cardDay) : null;
+            // a day nobody has batched yet: the casting's colour and method, and no batch count
+            const info = dayInfo ? (dayInfo.hasTickets ? dayInfo : { colorLogTitle: wholeInfo?.colorLogTitle || dayInfo.colorLogTitle, castMethod: wholeInfo?.castMethod || dayInfo.castMethod, batchCount: 0 }) : wholeInfo;
             if (info) {
                 if (info.colorLogTitle) t.colorLogTitle = info.colorLogTitle;
                 if (info.castMethod) t.castMethod = info.castMethod;

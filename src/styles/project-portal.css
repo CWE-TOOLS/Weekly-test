@@ -6890,6 +6890,23 @@ body.pp-printing .pp-tab-panel[data-panel="batch-tickets"] { display: none !impo
 }
 @media (max-width: 700px) { .pp-bt-totals-notes { grid-template-columns: 1fr; } }
 
+/* Batch Tickets: a left-over colour ticket's pill (2026-11-24) */
+.pp-bt-pill.pp-bt-pill-leftover { border-color: #dc2626; color: #b91c1c; background: #fef2f2; }
+.pp-bt-pill.pp-bt-pill-leftover.pp-bt-pill-active { background: #dc2626; color: #fff; }
+
+/* Mix Day Totals — Day / Job switch (2026-11-24) */
+.pp-bt-totals-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 10px; }
+.pp-bt-totals-head .pp-bt-totals-title { margin-bottom: 0; }
+.pp-bt-scope { display: inline-flex; border: 1px solid var(--accent-primary, #4f46e5); border-radius: 6px; overflow: hidden; }
+.pp-bt-scope-btn { border: 0; background: #fff; color: var(--accent-primary, #4f46e5); font: inherit; font-size: 12px; font-weight: 700; padding: 4px 14px; cursor: pointer; }
+.pp-bt-scope-btn + .pp-bt-scope-btn { border-left: 1px solid var(--accent-primary, #4f46e5); }
+.pp-bt-scope-btn:hover { background: #eef2ff; }
+.pp-bt-scope-btn.is-on, .pp-bt-scope-btn.is-on:hover { background: var(--accent-primary, #4f46e5); color: #fff; }
+.pp-bt-totals-scope-note { font-size: 12px; color: #475569; margin: -4px 0 10px; }
+.pp-bt-totals-scope-note b { color: #0f172a; }
+.pp-bt-totals-scope-note .pp-bt-totals-scope-skip { color: #b45309; font-weight: 700; }
+@media print { .pp-bt-scope { display: none; } }
+
 /* Mix Day Totals — scrim line (2026-10-26) */
 .pp-bt-totals-scrim {
     margin-top: 10px;
@@ -7088,6 +7105,28 @@ body.pp-clay-zoom-open { overflow: hidden; }
 /* Casting Layout: base sizes + check fitment (2026-11-06) */
 .pp-clay-fit { margin-left: auto; }
 .pp-clay-print { margin-left: 0; }
+/* Cast days (2026-11-20): the row of day bubbles over the layout of a casting with 2+ cast days */
+.pp-clay-days { margin: 0 0 8px; }
+.pp-clay-days[hidden] { display: none; }
+.pp-clay-days-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.pp-clay-day, .pp-clay-day:hover, .pp-clay-day:focus { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; flex: 1 1 240px; max-width: 460px; min-width: 0; padding: 8px 12px; border: 2px solid #cbd5e1; border-radius: 10px; background: #fff; color: #0f172a; text-align: left; font-family: inherit; font-weight: 400; cursor: pointer; box-shadow: none; outline: none; }
+.pp-clay-day:hover { border-color: #64748b; background: #f8fafc; }
+.pp-clay-day:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.pp-clay-day.pp-clay-day-on, .pp-clay-day.pp-clay-day-on:hover, .pp-clay-day.pp-clay-day-on:focus { border-color: #1d4ed8; background: #eff6ff; box-shadow: 0 0 0 1px #1d4ed8; }
+.pp-clay-day.pp-clay-day-drop, .pp-clay-day.pp-clay-day-drop:hover { border-style: dashed; border-color: #16a34a; background: #f0fdf4; box-shadow: 0 0 0 2px #86efac; }
+.pp-clay-day-top { font-size: 13px; font-weight: 800; letter-spacing: 0.03em; }
+.pp-clay-day-forms { font-size: 12px; color: #334155; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-clay-day-sides { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11.5px; }
+.pp-clay-day-side { padding: 1px 8px; border-radius: 9999px; border: 1px solid; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-clay-day-side.free { background: #f0fdf4; color: #166534; border-color: #86efac; }
+.pp-clay-day-side.taken { background: #fef2f2; color: #b91c1c; border-color: #fca5a5; }
+.pp-clay-day-side.mine { background: #eff6ff; color: #1d4ed8; border-color: #93c5fd; }
+.pp-clay-day-side.shared { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+.pp-clay-days-tools { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: #475569; }
+.pp-clay-send, .pp-clay-send:focus { padding: 5px 12px; border: 1px solid #15803d; border-radius: 8px; background: #16a34a; color: #fff; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: none; }
+.pp-clay-send:hover { background: #15803d; }
+.pp-clay-unsplit, .pp-clay-unsplit:hover, .pp-clay-unsplit:focus { background: none; border: none; box-shadow: none; padding: 0; color: #1d4ed8; text-decoration: underline; font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+@media print { .pp-clay-days { display: none !important; } }
 .pp-clay-fit-result { font-size: 13px; font-weight: 600; color: #1e3a8a; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 6px 10px; margin: 0 0 8px; }
 .pp-clay-fit-result:empty { display: none; }
 .pp-clay-base-row { display: flex; gap: 12px; }
@@ -7115,3 +7154,57 @@ body.pp-clay-zoom-open { overflow: hidden; }
 .pp-clay-condt-opt span { color: #64748b; font-size: 12px; margin-left: auto; }
 .pp-clay-float-open { margin-top: 3px; color: #15803d; font-weight: 800; }
 .clay-blocked-cond text { pointer-events: none; }
+
+/* ---------- Cast days on the Casting Inventory and Tracking (2026-11-20) ---------- */
+.pp-inv-days { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 8px; padding: 6px 8px; border: 1px solid #99f6e4; border-radius: 8px; background: #f0fdfa; }
+.pp-inv-days-title { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; color: #0f766e; }
+.pp-inv-day-pill { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 10px; border-radius: 12px; background: #ccfbf1; color: #134e4a; font-size: 12px; white-space: nowrap; }
+.pp-inv-day-pill b { font-weight: 800; }
+.pp-inv-day-pill-n { color: #0f766e; font-size: 11px; font-variant-numeric: tabular-nums; }
+.pp-inv-day-pill-empty { background: #f1f5f9; color: #64748b; }
+.pp-inv-day-pill-empty .pp-inv-day-pill-n { color: #94a3b8; }
+.pp-inv-days-hint { font-size: 11px; color: #475569; font-style: italic; }
+.pp-inv-days-clear, .pp-inv-days-clear:focus { margin-left: auto; padding: 3px 10px; border: 1px solid #99f6e4; border-radius: 6px; background: #ffffff; color: #0f766e; font-size: 11px; font-weight: 600; cursor: pointer; box-shadow: none; }
+.pp-inv-days-clear:hover, .pp-inv-days-clear:active { background: #ccfbf1; color: #134e4a; box-shadow: none; }
+.pp-inv-header-fields .pp-inv-h-day { color: #0f766e; }
+.pp-inv-input.pp-inv-day-cell, .pp-inv-input.pp-inv-day-cell:hover { display: flex; align-items: center; justify-content: center; min-width: 0; border-style: dashed; border-color: #99f6e4; background: #f0fdfa; color: #134e4a; font-weight: 700; font-variant-numeric: tabular-nums; cursor: help; }
+.pp-inv-input.pp-inv-day-input { text-align: center; border-color: #5eead4; background: #f0fdfa; color: #134e4a; font-weight: 700; padding-left: 2px; padding-right: 2px; }
+.pp-inv-input.pp-inv-day-input:focus { border-color: #0d9488; box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.2); background: #ffffff; }
+.pp-cast-card-days { flex: 0 0 auto; padding: 2px 8px; border-radius: 10px; background: #ccfbf1; color: #134e4a; font-size: 11px; font-weight: 700; white-space: nowrap; cursor: help; }
+.pp-cast-card-days[hidden] { display: none; }
+.pp-track-day-head { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 2px; padding: 4px 10px; border-radius: 6px; background: #ccfbf1; color: #134e4a; font-size: 12px; letter-spacing: 0.02em; }
+.pp-track-day-head b { font-weight: 800; }
+.pp-track-day-head span { margin-left: auto; font-size: 11px; color: #0f766e; }
+.pp-track-section-days { margin-left: 6px; padding: 1px 8px; border-radius: 10px; background: #ccfbf1; color: #134e4a; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.pp-stg-day-pcs { display: block; margin-top: 2px; padding: 0 5px; border-radius: 8px; background: #ccfbf1; color: #134e4a; font-size: 10px; font-weight: 700; line-height: 1.5; white-space: nowrap; width: max-content; cursor: help; }
+.pp-stg-day-pcs-none { background: #f1f5f9; color: #64748b; }
+.pp-bt-context-day { margin-left: 8px; padding: 2px 8px; border-radius: 10px; background: #ccfbf1; color: #134e4a; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; vertical-align: middle; cursor: help; }
+.pp-clay-days-info { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 8px; padding: 7px 10px; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #1e3a8a; font-size: 12.5px; line-height: 1.4; }
+.pp-clay-days-info-i { flex: 0 0 18px; width: 18px; height: 18px; border-radius: 50%; background: #2563eb; color: #ffffff; font-size: 12px; font-weight: 800; font-style: italic; font-family: Georgia, serif; text-align: center; line-height: 18px; margin-top: 1px; }
+/* Approvals box (PMs, 2026-11-20): the count reads at a glance - red = none, orange = some, green = all - and the
+   all done / clear all buttons are real buttons, bigger than the P. MANUAL tag. */
+.pp-appr-card .pp-appr-col-count { margin-top: 6px; font-size: 15px; font-weight: 800; letter-spacing: 0.01em; color: #c2410c; }
+.pp-appr-card .pp-appr-col-count.pp-appr-col-count-none { color: #b91c1c; }
+.pp-appr-card .pp-appr-col-count.pp-appr-col-count-done { color: #15803d; }
+.pp-appr-card .pp-appr-all { margin-top: 7px; padding: 6px 16px; border-radius: 6px; font-size: 12.5px; font-weight: 700; background: #1e293b; color: #ffffff; }
+.pp-appr-card .pp-appr-all:hover, .pp-appr-card .pp-appr-all:focus { background: #0f172a; color: #ffffff; box-shadow: none; }
+/* Batch tickets of a casting split over its cast days: the pop-up that picks the days to print (2026-11-20). */
+.pp-modal.pp-bt-days-modal { max-width: 560px; }
+.pp-bt-days-hint { margin: 0 0 12px; font-size: 13px; line-height: 1.45; color: #475569; }
+.pp-bt-days-list { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
+.pp-bt-days-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #99f6e4; border-radius: 8px; background: #f0fdfa; color: #134e4a; font-size: 13px; cursor: pointer; }
+.pp-bt-days-row input { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; accent-color: #0d9488; cursor: pointer; }
+.pp-bt-days-row:has(input:not(:checked)) { border-color: #e2e8f0; background: #f8fafc; color: #64748b; }
+.pp-bt-days-row.pp-bt-days-row-off, .pp-bt-days-row.pp-bt-days-row-off input { cursor: not-allowed; }
+.pp-bt-days-name { flex: 0 0 auto; font-size: 15px; font-weight: 800; white-space: nowrap; }
+.pp-bt-days-date { flex: 0 0 auto; font-weight: 700; white-space: nowrap; }
+.pp-bt-days-what { flex: 1 1 auto; min-width: 0; font-size: 12px; }
+.pp-bt-days-state { flex: 0 0 auto; padding: 2px 8px; border-radius: 10px; background: #ffedd5; color: #9a3412; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.pp-bt-days-state.pp-bt-days-state-done { background: #dcfce7; color: #166534; }
+.pp-bt-days-foot { min-height: 17px; margin: 0 0 12px; font-size: 12px; line-height: 1.4; color: #15803d; }
+.pp-bt-days-foot.pp-bt-days-foot-warn { color: #c2410c; }
+.pp-bt-days-modal .pp-modal-actions button { padding: 9px 18px; font-size: 13.5px; }
+/* Casting card: fill the blank boxes of its rows from the type master list (2026-11-23). */
+.pp-inv-fill-master { margin-left: 8px; }
+.pp-inv-fill-master:not(:disabled) { border-color: #0d9488; color: #0f766e; font-weight: 700; }
+.pp-inv-fill-master:not(:disabled):hover { background: #ccfbf1; color: #134e4a; }
