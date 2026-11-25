@@ -8,7 +8,7 @@
  */
 
 import { getMonday, getWeekMonth, getWeekOfMonth } from '../../utils/date-utils.js';
-import { TRACKING_ITEMS, TRACKING_ITEM_LABELS, TRACKING_ITEM_ABBREVIATIONS, STATUS, STATUS_DISPLAY, FOLDABLE_ITEMS, defaultStatusOf } from '../../config/releasability-config.js?v=20261119-1';
+import { TRACKING_ITEMS, TRACKING_ITEM_LABELS, TRACKING_ITEM_ABBREVIATIONS, STATUS, STATUS_DISPLAY, FOLDABLE_ITEMS, defaultStatusOf, TRACKING_ITEM_OWNER } from '../../config/releasability-config.js?v=20261125-1';
 import { isWeekCollapsed } from './releasability-state.js';
 import { AUTO_MILESTONES, PORTAL_MANUAL_MILESTONES, BOARD_TAG_OVERRIDE, MS_TO_BOARD, milestonesApply, MILESTONE_HOW } from '../../config/milestones-config.js';
 
@@ -142,13 +142,25 @@ export function renderReleasabilityGrid(projects, manualWeeks = []) {
  * Department group definitions for column headers.
  * Each group spans a range of tracking item indices.
  */
-const COLUMN_GROUPS = [
-  { label: 'Classroom', startIndex: 0, endIndex: 2, className: 'group-classroom' },
-  { label: 'Project Manager', startIndex: 3, endIndex: 9, className: 'group-pm' },
-  { label: 'Fab Coordinator', startIndex: 10, endIndex: 15, className: 'group-fab-coordinator' },
-  { label: 'Engineering', startIndex: 16, endIndex: 20, className: 'group-engineering' },
-  { label: 'Release', startIndex: 21, endIndex: 21, className: 'group-release' }
-];
+const OWNER_GROUPS = {
+  classroom: { label: 'Classroom', short: 'Class', className: 'group-classroom' },
+  pm: { label: 'Project Manager', short: 'PM', className: 'group-pm' },
+  fab: { label: 'Fab Coordinator', short: 'Fab', className: 'group-fab-coordinator' },
+  engineering: { label: 'Engineering', short: 'Eng', className: 'group-engineering' },
+  release: { label: 'Release', short: 'Release', className: 'group-release' }
+};
+/** One band per run of neighbouring columns with the same owner (a narrow band gets the short name). */
+const COLUMN_GROUPS = TRACKING_ITEMS.reduce((groups, item, index) => {
+  const owner = TRACKING_ITEM_OWNER[item] || 'pm';
+  const last = groups[groups.length - 1];
+  if (last && last.owner === owner) last.endIndex = index;
+  else groups.push({ owner, startIndex: index, endIndex: index });
+  return groups;
+}, []).map(g => {
+  const o = OWNER_GROUPS[g.owner];
+  const span = g.endIndex - g.startIndex + 1;
+  return { ...g, label: span === 1 ? o.short : span === 2 && o.label.length > 11 ? o.short : o.label, title: o.label, className: o.className };
+});
 
 /**
  * Create the header rows (group header + tracking item headers)
@@ -174,6 +186,7 @@ function createHeaderRow() {
     const groupCell = document.createElement('div');
     groupCell.className = `group-header-cell ${group.className}`;
     groupCell.textContent = group.label;
+    groupCell.title = group.title;
     groupCell.style.gridColumn = `span ${span}`;
     cells.push(groupCell);
   });
@@ -212,6 +225,7 @@ function createHeaderRow() {
         : ' — MANUAL: click the cell')
         + (MILESTONE_HOW[item] ? '\n\nHow: ' + MILESTONE_HOW[item] : ''); // Tooltip with full name + how it is set
     headerCell.dataset.trackingIndex = index; // Add index for individual targeting
+    headerCell.dataset.owner = TRACKING_ITEM_OWNER[item] || 'pm';   // header colour by owner
     headerCell.dataset.trackingItem = item;   // the key, for per-column styling (Casting Inventory stands out)
     if (FOLDABLE_ITEMS.includes(item)) {
       // Foldable column: the whole header is the switch. Folded, it shows a thin upright name and an arrow.

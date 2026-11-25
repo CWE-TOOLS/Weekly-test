@@ -689,6 +689,8 @@ html {
   color: var(--text-primary);
 }
 
+.group-header-cell { padding-left: 2px; padding-right: 2px; overflow: hidden; white-space: nowrap; min-width: 0; }
+
 .group-header-cell.group-spacer {
   background-color: var(--surface-container);
 }
@@ -839,28 +841,11 @@ html {
 @keyframes status-auto-nudge { 0% { transform: scale(1); } 40% { transform: scale(0.92); } 100% { transform: scale(1); } }
 
 /* Individual tracking item header colors */
-.tracking-item-header[data-tracking-index="0"] { background-color: var(--tracking-0-color); }   /* Classroom #1 */
-.tracking-item-header[data-tracking-index="1"] { background-color: var(--tracking-1-color); }   /* Classroom #2 */
-.tracking-item-header[data-tracking-index="2"] { background-color: var(--tracking-2-color); }   /* Classroom #3 */
-.tracking-item-header[data-tracking-index="3"] { background-color: var(--tracking-3-color); }   /* Shop Folder Built */
-.tracking-item-header[data-tracking-index="4"] { background-color: var(--tracking-4-color); }   /* Approved SDs */
-.tracking-item-header[data-tracking-index="5"] { background-color: var(--tracking-5-color); }   /* Sample Approval */
-.tracking-item-header[data-tracking-index="6"] { background-color: var(--tracking-6-color); }   /* Color Log */
-.tracking-item-header[data-tracking-index="7"] { background-color: var(--tracking-7-color); }   /* Final Optimizer HRS */
-.tracking-item-header[data-tracking-index="8"] { background-color: var(--tracking-8-color); }   /* Rebar/Drilling Layout */
-.tracking-item-header[data-tracking-index="9"] { background-color: var(--tracking-9-color); }   /* Casting Inventory (PM) */
-.tracking-item-header[data-tracking-index="10"] { background-color: var(--tracking-10-color); } /* Labels (Fab Coordinator) */
-.tracking-item-header[data-tracking-index="11"] { background-color: var(--tracking-11-color); } /* Final Tracking */
-.tracking-item-header[data-tracking-index="12"] { background-color: var(--tracking-12-color); } /* Batching Sheets */
-.tracking-item-header[data-tracking-index="13"] { background-color: var(--tracking-13-color); } /* Casting Layout */
-.tracking-item-header[data-tracking-index="14"] { background-color: var(--tracking-14-color); } /* Shop Folder Cover */
-.tracking-item-header[data-tracking-index="15"] { background-color: var(--tracking-15-color); } /* Mitti QC Template */
-.tracking-item-header[data-tracking-index="16"] { background-color: var(--tracking-16-color); } /* Inflow Sales Ticket (Engineering) */
-.tracking-item-header[data-tracking-index="17"] { background-color: var(--tracking-17-color); } /* 3D Drawings/Parts List */
-.tracking-item-header[data-tracking-index="18"] { background-color: var(--tracking-18-color); } /* Toolpath Program */
-.tracking-item-header[data-tracking-index="19"] { background-color: var(--tracking-19-color); } /* Jig List */
-.tracking-item-header[data-tracking-index="20"] { background-color: var(--tracking-20-color); } /* Staging */
-.tracking-item-header[data-tracking-index="21"] { background-color: var(--tracking-21-color); } /* Green Sticker (Release) */
+.tracking-item-header[data-owner="classroom"] { background-color: #B39DDB; }
+.tracking-item-header[data-owner="pm"] { background-color: #80CBC4; }
+.tracking-item-header[data-owner="fab"] { background-color: #FFF59D; }
+.tracking-item-header[data-owner="engineering"] { background-color: #A5D6A7; }
+.tracking-item-header[data-owner="release"] { background-color: #66BB6A; }
 
 /* Week Section */
 .week-section {
