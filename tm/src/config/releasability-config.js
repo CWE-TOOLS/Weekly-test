@@ -66,7 +66,7 @@ export const STATUS_DISPLAY = {
 /**
  * List of all tracking items for project releasability
  * These appear as columns in the releasability grid
- * Order = the order things happen to the folder (2026-11-25 preview), left = first, Green Sticker = last
+ * Order matches the standard workflow sequence
  */
 export const TRACKING_ITEMS = [
   'Classroom #1',
@@ -75,51 +75,23 @@ export const TRACKING_ITEMS = [
   'Shop Folder Built',
   'Approved SDs',
   'Sample Approval',
+  'Color Log',
   'Final Optimizer HRS',
+  'Rebar/Drilling Layout',
+  'Casting Inventory',
+  'Labels',
+  'Final Tracking',
+  'Batching Sheets',
+  'Casting Layout',
+  'Shop Folder Cover',
+  'Mitti QC Template',
   'Inflow Sales Ticket',
   '3D Drawings/Parts List',
   'Toolpath Program',
-  'Casting Inventory',
-  'Color Log',
   'Jig List',
-  'Casting Layout',
-  'Rebar/Drilling Layout',
-  'Batching Sheets',
-  'Final Tracking',
-  'Labels',
-  'Mitti QC Template',
   'Staging',
-  'Shop Folder Cover',
   'Green Sticker'
 ];
-
-/**
- * Who owns each column (the band above the headers and the header colour follow the column, not its position).
- */
-export const TRACKING_ITEM_OWNER = {
-  'Classroom #1': 'classroom',
-  'Classroom #2': 'classroom',
-  'Classroom #3': 'classroom',
-  'Shop Folder Built': 'pm',
-  'Approved SDs': 'pm',
-  'Sample Approval': 'pm',
-  'Final Optimizer HRS': 'pm',
-  'Inflow Sales Ticket': 'engineering',
-  '3D Drawings/Parts List': 'engineering',
-  'Toolpath Program': 'engineering',
-  'Casting Inventory': 'pm',
-  'Color Log': 'pm',
-  'Jig List': 'engineering',
-  'Casting Layout': 'fab',
-  'Rebar/Drilling Layout': 'pm',
-  'Batching Sheets': 'fab',
-  'Final Tracking': 'fab',
-  'Labels': 'fab',
-  'Mitti QC Template': 'fab',
-  'Staging': 'engineering',
-  'Shop Folder Cover': 'fab',
-  'Green Sticker': 'release'
-};
 
 /**
  * Display-only header overrides for tracking items.
